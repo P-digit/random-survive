@@ -181,7 +181,8 @@ def build_app():
 
 if __name__ == "__main__":
     if not OPENAI_API_KEY:
-        print("⚠️  OPENAI_API_KEY가 없습니다. .env.example을 .env로 복사한 뒤 키를 입력하세요.")
+        print("⚠️  OPENAI_API_KEY가 없거나 올바르지 않습니다. "
+              ".env.example을 .env로 복사한 뒤 안내 문구를 지우고 실제 키를 입력하세요.")
     risk_model.load_model()   # 첫 실행 시 위험도 모델 학습 (몇 초)
     demo, launch_kwargs = build_app()
     demo.launch(**launch_kwargs)
