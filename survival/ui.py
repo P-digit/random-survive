@@ -307,6 +307,24 @@ def render_hud(state):
         parts.append(f'<div class="card{extreme}"><h4>{title}</h4>'
                      f'<div class="hazard">{escape(state.hazard["desc"])}</div></div>')
 
+    # 탈것 + 수배도
+    if state.vehicle or state.wanted >= 1:
+        rows = ""
+        if state.vehicle:
+            v = state.vehicle
+            stolen = ' <span class="badge" style="border-color:var(--red);color:var(--red)">도난 차량</span>' \
+                if v.get("stolen") else ""
+            rows += (f'<div class="hazard">🚙 <b>{escape(v["name"])}</b>{stolen}</div>'
+                     f'<div class="weather"><span class="sub">남은 연료로 약 {v["range_km"]:,}km · '
+                     f'{"바다도 건널 수 있음" if v.get("sea") else "육로만"}</span></div>')
+        if state.wanted >= 1:
+            change = d.get("wanted", 0)       # 수배도는 오르는 게 나쁜 것이므로 색을 뒤집는다
+            rows += (_bar("🚨 수배", state.wanted, "var(--red)", change)
+                     .replace(_delta(change), _delta(change, good_when_up=False))
+                     .replace("changed-up", "changed-tmp").replace("changed-down", "changed-up")
+                     .replace("changed-tmp", "changed-down"))
+        parts.append(f'<div class="card"><h4>OUTLAW</h4>{rows}</div>')
+
     # 기후
     c = state.climate
     if c:
@@ -343,6 +361,9 @@ def render_hud(state):
         if ticket:
             price = f'🎫 예약됨 · {"한국까지" if key == "flight" else str(ticket["km"]) + "km"}'
         rows += f'<tr class="{"ok" if usable else "no"}"><td>{rule["label"]}</td><td>{price}</td></tr>'
+    if state.vehicle:
+        rows = (f'<tr class="ok"><td>{escape(state.vehicle["name"])} (보유)</td>'
+                f'<td>무료 · 최대 {state.vehicle["range_km"]:,}km</td></tr>') + rows
     parts.append(f'<div class="card"><h4>TRANSPORT</h4><table class="fares">{rows}</table></div>')
 
     parts.append('</div>')

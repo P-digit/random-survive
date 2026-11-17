@@ -54,6 +54,26 @@ TRAVEL_RULES = {
 }
 LAND_METHODS = {"walk", "hitchhike", "bus", "train"}
 
+# --- 자유 행동 (시도 판정) ---
+# 난이도별 기본 성공 확률. 상태·소지품·상황에 따라 엔진이 보정한다.
+ATTEMPT_CHANCE = {"easy": 0.85, "normal": 0.60, "hard": 0.35, "very_hard": 0.15}
+# 실패했을 때 몸싸움 등으로 입는 피해(체력)
+ATTEMPT_FAIL_DAMAGE = {"easy": 5, "normal": 12, "hard": 20, "very_hard": 30}
+
+# 손에 넣은 탈것: 이름, 속도(km/h), 연료를 가득 채웠을 때 갈 수 있는 거리(km), 바다를 건널 수 있는지
+VEHICLES = {
+    "car":       {"label": "승용차",   "speed": 70, "range": 550, "sea": False},
+    "truck":     {"label": "트럭",     "speed": 60, "range": 750, "sea": False},
+    "motorbike": {"label": "오토바이", "speed": 55, "range": 300, "sea": False},
+    "boat":      {"label": "보트",     "speed": 25, "range": 350, "sea": True},
+}
+
+# 수배도(0~100): 불법 행동을 하면 오르고, 시간이 지나거나 멀리 떠나면 내려간다
+WANTED_ON_SUCCESS = 20       # 불법 행동에 성공했을 때 (목격자, 신고)
+WANTED_ON_FAIL = 35          # 불법 행동에 실패했을 때 (붙잡히거나 얼굴이 알려짐)
+WANTED_DECAY_PER_HOUR = 0.3
+WANTED_AIRPORT_LIMIT = 50    # 이 이상이면 공항·항구 검문에서 붙잡힐 수 있다
+
 # 대형 이벤트(기회): 매 턴 발생 확률과, 이 턴 수만큼 안 나오면 반드시 나오게 하는 보정
 MAJOR_EVENT_CHANCE = 0.10
 MAJOR_EVENT_PITY_TURNS = 8

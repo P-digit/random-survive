@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 
 from . import climate as climate_api
 from . import geo
-from .config import (ARRIVAL_RADIUS_KM, LAND_METHODS, MAJOR_EVENT_CHANCE,
+from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, LAND_METHODS,
+                     MAJOR_EVENT_CHANCE, VEHICLES, WANTED_AIRPORT_LIMIT, WANTED_DECAY_PER_HOUR,
+                     WANTED_ON_FAIL, WANTED_ON_SUCCESS,
                      MAJOR_EVENT_PITY_TURNS, START_ITEMS, START_MONEY, TRAVEL_RULES,
                      VITALS_DRAIN)
 from .events import (BIOME_HAZARDS, BIOMES, classify_biome, roll_event,
@@ -93,6 +95,8 @@ class GameState:
     climate_at: list = field(default_factory=list)       # 기후를 조회한 좌표 [lat, lon]
     notices: list = field(default_factory=list)          # 이번 턴의 중요 알림 (대화창 표시용)
     tickets: list = field(default_factory=list)          # 예약(결제)해 둔 교통편. 탈 때까지 계속 기억한다
+    vehicle: dict | None = None       # 손에 넣은 탈것 (탈취, 구매 등)
+    wanted: float = 0.0               # 수배도 0~100
     _snapshot: dict = field(default_factory=dict)
 
     # ---------- 시간 ----------
@@ -233,6 +237,7 @@ class GameState:
             else:
                 self.health = clamp(self.health - damage * h)
             self.elapsed_hours += h
+            self.wanted = max(0.0, self.wanted - WANTED_DECAY_PER_HOUR * h)
             self._check_death("탈수·굶주림·혹독한 환경을 버티지 못했다")
         self.sync_weather()
         self.time_passed_this_turn = True
@@ -301,6 +306,125 @@ class GameState:
                 self.items.append(name)
         return rejected
 
+    # ---------- 자유 행동 ----------
+    def attempt(self, action, difficulty="normal", illegal=False, violent=False, item="", stealth=False):
+        """결과가 불확실한 행동을 판정한다. 성공 확률은 엔진이 계산하고 주사위를 굴린다.
+
+        GM은 난이도와 성격(불법/폭력)만 정하고, 성공 여부는 정하지 못한다.
+        """
+        if self.turn_flags.get("attempt"):
+            return {"error": "이번 턴에는 이미 시도 판정을 했다. 한 턴에는 시도 하나만 판정한다."}
+        difficulty = difficulty if difficulty in ATTEMPT_CHANCE else "normal"
+        chance = ATTEMPT_CHANCE[difficulty]
+        reasons = []
+        if self.energy < 30:
+            chance -= 0.15
+            reasons.append("지쳐 있음 -15%")
+        if self.health < 40:
+            chance -= 0.15
+            reasons.append("부상 -15%")
+        used = self.find_item(item) if item else None
+        if used:
+            chance += 0.15
+            reasons.append(f"{used} 사용 +15%")
+        if stealth and self.is_night:
+            chance += 0.10
+            reasons.append("어둠을 틈탐 +10%")
+        chance = round(min(0.95, max(0.05, chance)), 2)
+        success = random.random() < chance
+
+        effects = []
+        if not success and violent:
+            damage = ATTEMPT_FAIL_DAMAGE[difficulty]
+            self.health = clamp(self.health - damage)
+            effects.append(f"몸싸움 끝에 체력 -{damage}")
+            self._check_death("무모한 시도가 마지막이 되었다")
+        if illegal:
+            gain = WANTED_ON_SUCCESS if success else WANTED_ON_FAIL
+            self.wanted = clamp(self.wanted + gain)
+            effects.append(f"수배도 +{gain} (현재 {self.wanted:.0f})")
+        self.turn_flags["attempt"] = {"action": str(action)[:40], "chance": chance, "success": success,
+                                      "illegal": bool(illegal), "effects": effects}
+        return {"success": success, "chance": f"{chance * 100:.0f}%", "보정": reasons or ["없음"],
+                "엔진이_적용한_결과": effects or ["없음"],
+                "안내": ("성공했다. 성공의 결과(차량 획득은 acquire_vehicle, 돈·물건은 update_status/"
+                        "update_inventory)를 툴로 반영하고 서술하라." if success else
+                        "실패했다. 목표를 이루지 못했다. 실패를 그대로 서술하고, 상대의 반응(반격, 신고, 도주)을 "
+                        "현실적으로 그려라. 이미 엔진이 적용한 피해를 다시 적용하지 마라.")}
+
+    def acquire_vehicle(self, kind, name=""):
+        """탈것을 손에 넣는다. 같은 턴에 성공한 시도(탈취, 구매 협상 등)가 있어야 한다."""
+        attempt = self.turn_flags.get("attempt")
+        if not attempt or not attempt["success"]:
+            return {"success": False,
+                    "message": "탈것을 얻으려면 같은 턴에 attempt_action 으로 시도해서 성공해야 한다."}
+        if kind not in VEHICLES:
+            return {"success": False, "message": f"알 수 없는 탈것 종류: {kind}"}
+        spec = VEHICLES[kind]
+        label = str(name or spec["label"]).strip()[:20]
+        fuel = round(spec["range"] * random.uniform(0.4, 0.9))   # 연료는 얼마나 남아 있을지 모른다
+        self.vehicle = {"kind": kind, "name": label, "speed": spec["speed"], "range_km": fuel,
+                        "sea": spec["sea"], "stolen": attempt["illegal"]}
+        if self.offer and self.offer.get("id") in ("trucker", "convoy"):
+            self.offer = None             # 태워 주겠다던 차를 빼앗았다면 그 제안은 끝난 것이다
+        self.turn_flags["vehicle"] = dict(self.vehicle)
+        return {"success": True,
+                "message": f"{label}을(를) 손에 넣었다. 연료로 약 {fuel}km를 갈 수 있다. "
+                           "플레이어가 운전해서 가겠다고 하면 다음 턴부터 travel(method='drive') 로 이동한다."}
+
+    def _arrest(self, where):
+        """붙잡혔다: 하루를 잃고, 벌금을 내고, 탈것과 표를 압수당한다."""
+        fine = round(self.money * 0.5, 2)
+        self.money = round(self.money - fine, 2)
+        lost = []
+        if self.vehicle:
+            lost.append(self.vehicle["name"])
+            self.vehicle = None
+        for ticket in list(self.tickets):
+            lost.append(ticket["item"])
+            self.tickets.remove(ticket)
+            if ticket["item"] in self.items:
+                self.items.remove(ticket["item"])
+        self.pass_time(12, "rest", sheltered=True)
+        self.pass_time(12, "rest", sheltered=True)
+        self.wanted = clamp(self.wanted - 40)
+        self.turn_flags["arrested"] = {"where": where, "fine": fine, "lost": lost}
+        return {"success": False, "arrested": True,
+                "message": f"{where}에서 붙잡혔다. 하루 동안 구금된 뒤 벌금 ${fine:.0f}을(를) 내고 풀려났다."
+                           + (f" 압수당한 것: {', '.join(lost)}." if lost else "")}
+
+    def arrest(self, reason=""):
+        """GM이 경찰에게 붙잡히는 상황을 처리할 때 쓴다. 수배도가 있어야 한다."""
+        if self.wanted <= 0:
+            return {"success": False, "message": "수배된 상태가 아니므로 체포될 이유가 없다."}
+        return self._arrest(reason or "검문")
+
+    def _drive(self, km):
+        """손에 넣은 탈것으로 한국 방향으로 이동한다. 장소 유형 제한도, 요금도 없다."""
+        v = self.vehicle
+        if not v:
+            return {"success": False, "message": "운전할 탈것이 없다."}
+        km = clamp(float(km), 1, min(v["range_km"], self.distance))
+        new_lat, new_lon = geo.move_toward_korea(self.lat, self.lon, km)
+        arriving = geo.distance_to_korea(new_lat, new_lon) <= ARRIVAL_RADIUS_KM
+        if not v["sea"] and not arriving and geo.is_land(new_lat, new_lon) is False:
+            return {"success": False, "message": "그 방향은 바다로 막혀 있다. 이 탈것으로는 건널 수 없다."}
+        self.pass_time(km / v["speed"], "ride", sheltered=True)
+        v["range_km"] = round(v["range_km"] - km)
+        name = v["name"]
+        empty = v["range_km"] <= 5
+        if empty:
+            self.vehicle = None
+        arrived = self._relocate(new_lat, new_lon, km, "hitchhike")
+        self.turn_flags["moved"] = {"how": name, "km": round(km), "cost": 0, "ticket": None}
+        tail = f" 연료가 바닥나 {name}을(를) 버려야 했다." if empty else f" 남은 연료로 약 {v['range_km']}km를 더 갈 수 있다."
+        if arrived:
+            return {"success": True, "arrived_in_korea": True,
+                    "message": f"{name}을(를) 몰고 {km:.0f}km를 달려 마침내 한국에 도착했다!"}
+        return {"success": True, "arrived_in_korea": False,
+                "message": f"{name}을(를) 몰고 {km:.0f}km를 이동했다. 도착한 곳: {self.place_name} "
+                           f"({self.place_type}, {self.biome_name}). 한국까지 {self.distance:.0f}km 남았다." + tail}
+
     def find_ticket_by_item(self, item):
         return next((t for t in self.tickets if t["item"] == item), None)
 
@@ -340,6 +464,8 @@ class GameState:
 
     def travel(self, method, km):
         """한국 방향으로 이동한다. 결과(성공 여부와 설명)를 딕셔너리로 반환한다."""
+        if method == "drive":
+            return self._drive(km)
         if method not in TRAVEL_RULES:
             return {"success": False, "message": f"알 수 없는 이동 수단: {method}"}
         rule = TRAVEL_RULES[method]
@@ -358,6 +484,9 @@ class GameState:
         if cost > self.money:
             return {"success": False,
                     "message": f"돈이 부족하다. {rule['label']} {km:.0f}km 요금 ${cost:.0f}, 보유 ${self.money:.0f}."}
+        if method in ("flight", "ship") and self.wanted >= WANTED_AIRPORT_LIMIT \
+                and random.random() < self.wanted / 100:
+            return self._arrest("공항 출국 심사" if method == "flight" else "항구 검문")
         hitch_chance = self.hazard["hitch"] if self.place_type == "야생" else 0.6
         if method == "hitchhike" and random.random() > hitch_chance:
             self.pass_time(1.5, "other")
@@ -396,6 +525,8 @@ class GameState:
         self.lat, self.lon = new_lat, new_lon
         self.distance = geo.distance_to_korea(new_lat, new_lon)
         self.moved_since_image += km
+        if km >= 300:
+            self.wanted = clamp(self.wanted - 15)     # 멀리 떠나면 쫓는 사람이 줄어든다
         self.scene_setting, self.scene_place, self.scene_desc = "outdoor", "", ""   # 새 장소의 야외에서 시작
         self.scene_features, self.scene_seen = [], []
         self.scene_dirty = True
@@ -507,7 +638,7 @@ class GameState:
     # ---------- 턴 진행 ----------
     def _tracked(self):
         return {"health": self.health, "satiety": self.satiety, "hydration": self.hydration,
-                "energy": self.energy, "money": self.money, "distance": self.distance,
+                "energy": self.energy, "money": self.money, "wanted": self.wanted, "distance": self.distance,
                 "hours": self.elapsed_hours}
 
     def begin_turn(self):
@@ -521,6 +652,10 @@ class GameState:
         # 극한 지형의 야생에서는 이벤트 판정을 한 단계 더 위험하게 한다
         level = min(2, self.risk["level"] + 1) if self.in_extreme_wild else self.risk["level"]
         self.event = roll_event(self.biome, self.place_type, level)
+        if self.place_type in ("마을", "도시") and self.wanted >= 20 and random.random() < self.wanted / 150:
+            self.event = {"kind": "danger",
+                          "text": "경찰이 수배 전단 속 얼굴과 당신을 번갈아 보더니 다가온다."
+                                  + (" 당신이 몰고 온 차량도 신고된 것이다." if self.vehicle and self.vehicle.get("stolen") else "")}
         if self.indoor and self.place_type == "야생":
             self.event = None            # 동굴·오두막 안에서는 야외 이벤트(눈보라, 짐승 등)가 직접 닥치지 않는다
         # 대형 이벤트(기회): 확률로 발생하고, 오래 안 나오면 반드시 나온다
@@ -566,6 +701,9 @@ class GameState:
             "한국까지_km": round(self.distance),
             "위험등급": self.risk["label"],
             "환경위험": self.hazard["desc"] if self.place_type == "야생" else "없음 (사람 사는 곳)",
+            "보유_탈것": (f"{self.vehicle['name']} (연료로 약 {self.vehicle['range_km']}km"
+                         + (", 훔친 차량" if self.vehicle.get("stolen") else "") + ")") if self.vehicle else "없음",
+            "수배도": f"{self.wanted:.0f}/100" + (" - 공항·항구 검문에서 붙잡힐 수 있음" if self.wanted >= WANTED_AIRPORT_LIMIT else ""),
             "예약한_교통편": [f"{t['item']} (결제 완료, 탑승 대기 중)" for t in self.tickets] or "없음",
             "현재장면": f"{'실내' if self.indoor else '야외'}" + (f" - {self.scene_place}" if self.scene_place else ""),
         }
