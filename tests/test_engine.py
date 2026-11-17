@@ -1,5 +1,6 @@
 """게임 엔진 테스트. 네트워크와 OpenAI 없이 실행된다:  python -m pytest"""
 import json
+import math
 import random
 import sys
 from pathlib import Path
@@ -416,7 +417,10 @@ def test_events_fit_the_scene(game):
     game.set_scene("indoor", "동굴 안", "Inside a dark cave.")
     game.turn = 20                          # 기회가 나올 차례여도, 맞는 것이 없으면 나오지 않는다
     game.begin_turn()
-    assert game.offer is None and game.event is None
+    assert game.offer is None
+    from survival.events import EVENTS
+    indoor_texts = {e["text"] for e in EVENTS if e.get("indoor")}
+    assert game.event is None or game.event["text"] in indoor_texts   # 실내에서는 실내 이벤트만
 
     game.set_scene("outdoor", "", "")
     game.begin_turn()
@@ -682,10 +686,10 @@ def test_hijack_truck_then_drive(game, monkeypatch):
 
     fix_roll(monkeypatch, 0.0)                                       # 주사위: 성공
     out = call(game, "attempt_action", action="트럭 기사를 기절시킨다", difficulty="hard",
-               illegal=True, violent=True, item="다용도 칼", stealth=False)
-    assert out["success"] and out["chance"] == "50%" and game.wanted == 20   # hard 35% + 칼 15%
-    assert "error" in call(game, "attempt_action", action="또", difficulty="easy", illegal=False,
-                           violent=False, item="", stealth=False)    # 한 턴에 한 번
+               crime="차량 절도", witnessed="victim", violent=True, item="다용도 칼", stealth=False)
+    assert out["success"] and out["chance"] == "50%" and game.wanted == 16   # hard 35% + 칼 15%, 20×1.3×0.6
+    assert "error" in call(game, "attempt_action", action="또", difficulty="easy", crime="none",
+                           witnessed="none", violent=False, item="", stealth=False)    # 한 턴에 한 번
     got = call(game, "acquire_vehicle", kind="truck", name="화물 트럭")
     assert got["success"] and game.vehicle["stolen"] and game.offer is None
     titles = [n["title"] for n in gamemaster.collect_notices(game)]
@@ -702,7 +706,7 @@ def test_failed_attack_hurts_and_raises_wanted(game, monkeypatch):
     game.begin_turn()
     fix_roll(monkeypatch, 0.99)                                      # 주사위: 실패
     out = call(game, "attempt_action", action="기사를 제압한다", difficulty="very_hard",
-               illegal=True, violent=True, item="", stealth=False)
+               crime="폭행", witnessed="bystanders", violent=True, item="", stealth=False)
     assert out["success"] is False and game.health == 70 and game.wanted == 35
     assert call(game, "acquire_vehicle", kind="truck", name="")["success"] is False
 
@@ -713,7 +717,8 @@ def test_chance_modifiers():
     weak.begin_turn = lambda: None
     weak.turn_flags = {}
     random.seed(0)
-    out = weak.attempt("창고에 몰래 들어간다", "normal", illegal=True, violent=False, item="", stealth=True)
+    out = weak.attempt("창고에 몰래 들어간다", "normal", crime="주거·건물 침입", witnessed="none",
+                       violent=False, item="", stealth=True)
     assert out["chance"] == "40%"                                     # 60 - 15 - 15 + 10(밤)
 
 
@@ -754,3 +759,136 @@ def test_wanted_consequences(game, monkeypatch):
     assert game.wanted == pytest.approx(28.5)                        # 시간이 지나면 내려간다
     game.wanted = 0
     assert call(game, "arrest", reason="검문")["success"] is False    # 수배가 없으면 체포도 없다
+
+
+
+# ---------- 8차 수정: 상황에 맞는 이벤트 / 범죄·목격자 / 돈 / 낮밤 기온 ----------
+from survival import events as events_module  # noqa: E402
+
+
+def ctx(**kw):
+    base = {"night": False, "indoor": False, "weather": "clear", "temp": 15, "season": "여름"}
+    base.update(kw)
+    return base
+
+
+def test_events_follow_place_time_weather():
+    texts = lambda *a, **k: {e["text"] for e in events_module.candidates(*a, **k)}  # noqa: E731
+    wild_night = texts("야생", "savanna", ctx(night=True))
+    assert any("사자" in s for s in wild_night) and not any("코끼리" in s for s in wild_night)
+    assert not any("경찰" in s or "소매치기" in s for s in wild_night)          # 야생에는 사람 이벤트 없음
+    city = texts("도시", "desert", ctx())
+    assert any("소매치기" in s for s in city) and not any("전갈" in s or "사자" in s for s in city)
+    assert not texts("도시", "desert", ctx(night=True)) & {s for s in city if "소매치기" in s}
+    assert any("와디" in s for s in texts("야생", "desert", ctx(weather="rain")))
+    assert not any("와디" in s for s in texts("야생", "desert", ctx(weather="clear")))
+    assert any("밤과 도토리" in s for s in texts("야생", "forest", ctx(season="가을")))
+    assert not any("밤과 도토리" in s for s in texts("야생", "forest", ctx(season="봄")))
+    assert any("열사병" in s for s in texts("야생", "desert", ctx(temp=40)))
+    assert not any("열사병" in s for s in texts("야생", "desert", ctx(temp=20)))
+    cave = texts("야생", "snow", ctx(indoor=True, weather="snow"))
+    assert any("지붕" in s for s in cave) and not any("늑대" in s for s in cave)
+    for place in ("야생", "마을", "도시"):
+        for biome in ("snow", "alpine", "desert", "jungle", "savanna", "forest"):
+            for night in (False, True):
+                for indoor in (False, True):
+                    assert len(events_module.candidates(place, biome, ctx(night=night, indoor=indoor))) >= 3
+
+
+def test_roll_event_uses_context():
+    rng = random.Random(2)
+    seen = [events_module.roll_event("jungle", "야생", 2, rng, ctx(night=True, weather="rain"))
+            for _ in range(200)]
+    texts = {e["text"] for e in seen if e}
+    assert texts and all(events_module.matches(next(x for x in events_module.EVENTS if x["text"] == s),
+                                                "야생", "jungle", ctx(night=True, weather="rain")) for s in texts)
+
+
+def test_wanted_only_for_witnessed_crimes(game, monkeypatch):
+    fix_roll(monkeypatch, 0.0)                                       # 성공
+    game.begin_turn()
+    game.attempt("늑대를 칼로 쫓아낸다", "hard", crime="none", witnessed="bystanders", violent=True)
+    assert game.wanted == 0                                          # 범죄가 아니면 수배 없음
+    game.begin_turn()
+    out = game.attempt("잠든 사이 지갑을 훔친다", "normal", crime="절도", witnessed="none")
+    assert game.wanted == 0 and "목격자 없음" in out["엔진이_적용한_결과"][0]
+    game.begin_turn()
+    game.attempt("시장에서 빵을 훔친다", "normal", crime="절도", witnessed="bystanders")
+    assert game.wanted == 16                                         # 20 × 0.8 × 1.0
+    game.begin_turn()
+    game.attempt("버스 무임승차", "easy", crime="무임승차", witnessed="victim")
+    assert game.wanted == 16 + 5                                     # 20 × 0.4 × 0.6 = 4.8 → 5
+    fix_roll(monkeypatch, 0.99)                                      # 실패하면 아무도 없었어도 들킨다
+    game.begin_turn()
+    game.attempt("창고 자물쇠를 딴다", "hard", crime="주거·건물 침입", witnessed="none")
+    assert game.wanted == 21 + 13                                    # 35 × 0.6 × 0.6 = 12.6 → 13
+
+
+def test_pay_and_auto_charge(game, monkeypatch):
+    game.begin_turn()
+    assert call(game, "pay", amount=8, purpose="생수 2병")["success"] and game.money == 42
+    assert call(game, "pay", amount=100, purpose="숙박")["success"] is False and game.money == 42
+    assert gamemaster.auto_charge(game, "당신은 $5를 내고 빵을 산다.") == 0      # 이미 냈으면 중복 차감 없음
+
+    game.begin_turn()                                               # GM이 pay 를 빠뜨린 경우
+    assert gamemaster.auto_charge(game, "주인에게 $12를 건네고 방 열쇠를 받는다.") == 12 and game.money == 30
+    game.begin_turn()
+    assert gamemaster.auto_charge(game, "노인이 당신에게 $20를 주었다.") == 0     # 받은 돈은 차감하지 않음
+    assert gamemaster.auto_charge(game, "15달러를 지불했다") == 15 and game.money == 15
+    game.end_turn(0.5)
+    assert game.delta["money"] == -15                               # 상태창에도 -15 로 표시된다
+
+    reply = SimpleNamespace(id="r", output=[], output_text="당신은 $7를 내고 물 한 병을 산다.")
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=lambda **k: reply)))
+    gamemaster.run_turn(game, "물을 산다")
+    assert game.money == 8
+
+
+def test_temperature_follows_time_of_day(game):
+    game.start_hour, game.start_offset, game.utc_offset, game.elapsed_hours = 12, 0, 0, 0
+    profile = [{"hour": (12 + i) % 24, "temperature": 20 + 10 * math.cos(2 * math.pi * ((12 + i) % 24 - 15) / 24),
+                "feels_like": 20.0} for i in range(30)]
+    game.set_weather(fake_weather(22, hourly=profile, utc_offset=0))
+    noon = game.weather["temperature"]
+    game.pass_time(12, "rest")                                       # 자정
+    midnight = game.weather["temperature"]
+    assert game.hour == 0 and midnight < noon - 10
+    for _ in range(2):                                               # 예보(30시간)를 넘어가도 낮밤이 반복된다
+        game.satiety = game.hydration = game.health = 100
+        game.pass_time(12, "rest")
+    assert game.hour == 0 and game.weather["temperature"] == pytest.approx(midnight)
+
+
+def test_diurnal_curve_without_forecast(game):
+    game.biome = "desert"
+    game.start_hour, game.elapsed_hours = 15, 0
+    game.set_weather(fake_weather(40, humidity=10, hourly=[]))
+    assert game.weather["temperature"] == pytest.approx(40)          # 오후 3시 최고
+    game.pass_time(12, "rest")                                       # 새벽 3시
+    assert game.hour == 3 and game.weather["temperature"] == pytest.approx(40 - 2 * 11)
+
+
+def test_clock_switches_to_local_time_zone(game):
+    game.start_hour, game.start_offset, game.utc_offset, game.elapsed_hours = 10, 1, 1, 0
+    profile = [{"hour": (17 + i) % 24, "temperature": 5.0, "feels_like": 5.0} for i in range(48)]
+    game.set_weather(fake_weather(5, hourly=profile, utc_offset=8))   # 시차 +7시간 지역으로 이동
+    assert game.hour == 17 and game.is_night is False
+    game.pass_time(3, "rest")
+    assert game.hour == 20 and game.is_night
+
+
+
+def test_positive_events_everywhere():
+    """어떤 상황에서도 그 상황에 맞는 긍정 이벤트가 3개 이상 있어야 한다."""
+    for place in ("야생", "마을", "도시"):
+        for biome in ("snow", "alpine", "desert", "jungle", "savanna", "forest"):
+            for night in (False, True):
+                for indoor in (False, True):
+                    for weather in ("clear", "rain", "snow", "storm", "fog"):
+                        for temp in (-10, 15, 35):
+                            c = ctx(night=night, indoor=indoor, weather=weather, temp=temp)
+                            lucky = [e for e in events_module.candidates(place, biome, c) if e["kind"] == "lucky"]
+                            assert len(lucky) >= 3, (place, biome, c)
+    texts = [e["text"] for e in events_module.EVENTS]
+    assert len(texts) == len(set(texts))                             # 중복 이벤트 없음

@@ -64,6 +64,7 @@ def _parse_hourly(data):
             code = int(hourly["weather_code"][i] or 0)
             desc, emoji, desc_en = WEATHER_CODES.get(code, ("알 수 없음", "❔", "unknown weather"))
             result.append({
+                "hour": int(str(times[i])[11:13]),            # 현지 시각(0~23)
                 "temperature": float(temp),
                 "feels_like": float(hourly["apparent_temperature"][i] if hourly["apparent_temperature"][i] is not None else temp),
                 "humidity": float(hourly["relative_humidity_2m"][i] or 50),
@@ -85,7 +86,7 @@ def get_weather(latitude, longitude):
                    "precipitation,weather_code,wind_speed_10m,is_day",
         "hourly": "temperature_2m,relative_humidity_2m,apparent_temperature,"
                   "precipitation,weather_code,wind_speed_10m",
-        "forecast_days": 4,
+        "forecast_days": 16,
         "timezone": "auto",
     }
     try:
@@ -109,6 +110,7 @@ def get_weather(latitude, longitude):
             "description_en": desc_en,
             "elevation": float(data.get("elevation", 0) or 0),
             "local_hour": int(str(cur.get("time", "T12:00")).split("T")[1][:2]),
+            "utc_offset": float(data.get("utc_offset_seconds", 0)) / 3600,
             "hourly": _parse_hourly(data),
         }
     except Exception:
@@ -116,5 +118,5 @@ def get_weather(latitude, longitude):
             "ok": False, "temperature": 15.0, "feels_like": 15.0, "humidity": 50.0,
             "precipitation": 0.0, "wind_speed": 5.0, "is_day": True, "code": -1,
             "description": "관측 불가", "emoji": "❔", "description_en": "unknown weather",
-            "elevation": 0.0, "local_hour": 12, "hourly": [],
+            "elevation": 0.0, "local_hour": 12, "hourly": [], "utc_offset": round(longitude / 15),
         }

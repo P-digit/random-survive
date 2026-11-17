@@ -63,69 +63,288 @@ def classify_biome(latitude, weather, climate=None):
     return "forest"
 
 
-# kind: danger(위험) / lucky(행운) / neutral(중립)
-COMMON_EVENTS = [
-    ("lucky", "누군가 버리고 간 배낭을 발견했다."),
-    ("lucky", "깨끗해 보이는 물줄기를 발견했다."),
-    ("neutral", "멀리서 연기가 피어오르는 것이 보인다."),
-    ("neutral", "스마트폰에 아주 약한 신호가 잠깐 잡혔다."),
-    ("danger", "발을 헛디뎌 발목을 접질렸다."),
-    ("danger", "가지고 있던 물건 하나가 보이지 않는다."),
+# ---------- 돌발 이벤트 ----------
+# 각 이벤트는 '언제, 어디서' 일어날 수 있는지 조건을 가진다. 조건에 맞는 것만 후보가 된다.
+#   kind    : danger(위험) / lucky(행운) / neutral(단서·정보)
+#   places  : 야생 / 마을 / 도시          biomes  : 지형 (없으면 어디서나)
+#   time    : day / night                 weather : rain / snow / storm / fog / clear 중 하나 이상
+#   temp    : hot(체감 30도 이상) / cold(체감 0도 이하) / mild
+#   indoor  : True면 실내에서만, False(기본)면 야외에서만
+#   season  : 봄 / 여름 / 가을 / 겨울 / 우기 / 건기 중 하나 이상
+# 사람 생활권에서 먼 야생에서는 동물·자연이, 마을·도시에서는 사람이 이벤트의 중심이 된다.
+
+
+def E(kind, text, **cond):
+    return dict(kind=kind, text=text, **cond)
+
+
+W = ("야생",)
+TOWN = ("마을",)
+CITY = ("도시",)
+SETTLED = ("마을", "도시")
+
+EVENTS = [
+    # ===== 설원 · 툰드라 =====
+    E("danger", "굶주린 늑대 무리의 울음소리가 점점 가까워진다.", places=W, biomes=("snow",), time="night"),
+    E("danger", "늑대 두 마리가 멀찍이 거리를 두고 당신을 따라오고 있다.", places=W, biomes=("snow", "forest")),
+    E("danger", "손끝과 발가락의 감각이 사라지고 있다. 동상 초기 증상이다.", places=W, biomes=("snow", "alpine"), temp="cold"),
+    E("danger", "발밑의 얼음이 쩍 하고 갈라지는 소리가 난다.", places=W, biomes=("snow",)),
+    E("danger", "눈에 덮인 구덩이에 허리까지 빠졌다. 옷 속으로 눈이 스며든다.", places=W, biomes=("snow",)),
+    E("danger", "눈부신 설원의 반사광 때문에 눈이 따갑고 시야가 흐려진다. 설맹 증상이다.",
+      places=W, biomes=("snow",), time="day", weather=("clear",)),
+    E("danger", "눈보라가 몰아쳐 한 치 앞도 보이지 않는다.", places=W, biomes=("snow", "alpine", "forest"),
+      weather=("snow", "storm")),
+    E("lucky", "사냥꾼이 쓰던 빈 오두막을 발견했다. 굴뚝이 멀쩡하다.", places=W, biomes=("snow", "forest")),
+    E("lucky", "바람을 막아 줄 커다란 바위 틈을 발견했다.", places=W, biomes=("snow", "alpine", "desert")),
+    E("lucky", "순록 떼가 일정한 방향으로 이동하고 있다. 유목민의 목초지로 향하는 길일 수 있다.",
+      places=W, biomes=("snow",)),
+    E("lucky", "구름 한 점 없는 밤하늘에 북극성이 또렷하다. 방향을 잡기 좋다.", places=W, time="night",
+      weather=("clear",)),
+    E("neutral", "눈 위에 설상차가 지나간 궤도 자국이 길게 나 있다.", places=W, biomes=("snow",)),
+    E("neutral", "눈 위에 사람 손바닥보다 큰 곰 발자국이 찍혀 있다. 아직 선명하다.", places=W, biomes=("snow", "forest")),
+
+    # ===== 고산지대 =====
+    E("danger", "머리가 깨질 듯 아프고 속이 메스껍다. 고산병 증세다.", places=W, biomes=("alpine",)),
+    E("danger", "위쪽 비탈에서 돌이 굴러떨어지기 시작했다.", places=W, biomes=("alpine",)),
+    E("danger", "짙은 구름이 산허리를 덮어 길이 보이지 않는다.", places=W, biomes=("alpine",), weather=("fog", "snow", "rain")),
+    E("danger", "능선 바로 위로 번개가 내리친다. 높은 곳에 있으면 위험하다.", places=W, biomes=("alpine", "savanna"),
+      weather=("storm",)),
+    E("danger", "해가 지자 기온이 무섭게 떨어진다. 바람이 뼛속까지 파고든다.", places=W, biomes=("alpine",), time="night"),
+    E("danger", "자갈 비탈에서 발이 미끄러졌다.", places=W, biomes=("alpine",)),
+    E("lucky", "산악인들이 바위 밑에 숨겨 둔 비상식량 꾸러미를 발견했다.", places=W, biomes=("alpine",)),
+    E("lucky", "돌을 쌓아 만든 목동의 움막이 보인다.", places=W, biomes=("alpine",)),
+    E("lucky", "만년설이 녹아 흐르는 차가운 개울을 발견했다.", places=W, biomes=("alpine",), time="day"),
+    E("neutral", "바위에 돌무더기 표지가 일정한 간격으로 쌓여 있다. 누군가 다니는 길이다.", places=W,
+      biomes=("alpine", "desert")),
+    E("neutral", "야크 몇 마리가 길을 막고 서서 콧김을 내뿜는다. 근처에 주인이 있을 것이다.", places=W, biomes=("alpine",)),
+
+    # ===== 사막 =====
+    E("danger", "지평선에서 누런 모래폭풍이 벽처럼 밀려온다.", places=W, biomes=("desert", "savanna"),
+      weather=("clear",)),
+    E("danger", "신발 옆으로 전갈이 꼬리를 치켜든 채 기어 다닌다.", places=W, biomes=("desert",), time="night"),
+    E("danger", "모래 속에 몸을 숨긴 뿔살모사를 밟을 뻔했다.", places=W, biomes=("desert",)),
+    E("danger", "극심한 더위에 어지럼증과 구역질이 몰려온다. 열사병 직전이다.", places=W,
+      biomes=("desert", "savanna"), time="day", temp="hot"),
+    E("danger", "멀리 반짝이는 호수를 향해 한참을 걸었지만 신기루였다.", places=W, biomes=("desert",), time="day"),
+    E("danger", "해가 지자 사막의 열기가 순식간에 사라지고 한기가 몰려온다.", places=W, biomes=("desert",), time="night"),
+    E("danger", "비가 내리자 마른 강바닥(와디)에 흙탕물이 무섭게 불어나기 시작했다.", places=W,
+      biomes=("desert", "savanna"), weather=("rain", "storm")),
+    E("lucky", "야자수가 몇 그루 서 있는 작은 오아시스가 보인다.", places=W, biomes=("desert",)),
+    E("lucky", "바위의 움푹한 곳에 빗물이 고여 있다.", places=W, biomes=("desert", "savanna", "alpine"),
+      weather=("rain", "storm")),
+    E("lucky", "가시덤불 아래 그늘에서 잠시 숨을 돌릴 수 있는 곳을 찾았다.", places=W, biomes=("desert",), time="day"),
+    E("neutral", "낙타를 끌고 가는 대상 행렬이 지평선에 보인다.", places=W, biomes=("desert",), time="day"),
+    E("neutral", "모래 위에 낙타 발자국과 바퀴 자국이 한 방향으로 이어져 있다.", places=W, biomes=("desert",)),
+
+    # ===== 열대우림 =====
+    E("danger", "덤불 속에서 독사가 고개를 들고 혀를 날름거린다.", places=W, biomes=("jungle", "savanna")),
+    E("danger", "갑자기 스콜이 쏟아져 온몸이 흠뻑 젖었다.", places=W, biomes=("jungle",), weather=("rain", "storm")),
+    E("danger", "모기떼가 구름처럼 달려든다. 물린 자리가 부어오른다.", places=W, biomes=("jungle",)),
+    E("danger", "다리에 거머리 여러 마리가 달라붙어 있다.", places=W, biomes=("jungle",), weather=("rain", "storm", "fog")),
+    E("danger", "발을 디딘 곳이 불개미 집이었다. 다리가 불타는 듯 따갑다.", places=W, biomes=("jungle", "savanna")),
+    E("danger", "어둠 속에서 큰 고양잇과 짐승의 낮은 울음소리가 들린다.", places=W, biomes=("jungle",), time="night"),
+    E("danger", "비에 불어난 강물이 흙탕물이 되어 거세게 흐른다. 건너기 어렵다.", places=W,
+      biomes=("jungle", "forest"), weather=("rain", "storm")),
+    E("danger", "썩은 거목이 굉음을 내며 바로 옆으로 쓰러졌다.", places=W, biomes=("jungle", "forest"),
+      weather=("storm", "rain")),
+    E("lucky", "잘 익은 야생 바나나 군락을 발견했다.", places=W, biomes=("jungle",)),
+    E("lucky", "굵은 덩굴을 자르면 마실 수 있는 물이 흘러나온다는 것을 기억해 냈다.", places=W, biomes=("jungle",)),
+    E("lucky", "강가에 주인 없는 나룻배가 묶여 있다.", places=W, biomes=("jungle", "forest")),
+    E("neutral", "원숭이 무리가 나무 위에서 시끄럽게 경고음을 낸다. 근처에 무언가 있다.", places=W, biomes=("jungle",)),
+    E("neutral", "강물에 플라스틱 병이 떠내려온다. 상류에 사람이 산다.", places=W, biomes=("jungle", "forest", "savanna")),
+    E("neutral", "멀리서 전기톱 소리가 들린다. 벌목꾼이 있는 것 같다.", places=W, biomes=("jungle", "forest"), time="day"),
+
+    # ===== 사바나 · 초원 =====
+    E("danger", "멀리서 사자의 포효가 들린다. 생각보다 가깝다.", places=W, biomes=("savanna",), time="night"),
+    E("danger", "풀숲 사이로 하이에나 무리가 어슬렁거린다.", places=W, biomes=("savanna", "desert"), time="night"),
+    E("danger", "마른 풀밭에 들불이 번지며 바람을 타고 다가온다.", places=W, biomes=("savanna",),
+      weather=("clear",), temp="hot"),
+    E("danger", "물소 한 마리가 고개를 숙이고 당신 쪽을 노려본다.", places=W, biomes=("savanna",)),
+    E("danger", "코끼리 떼가 새끼를 데리고 길목을 지나간다. 가까이 가면 위험하다.", places=W, biomes=("savanna",), time="day"),
+    E("danger", "흙탕물 웅덩이의 물을 마신 뒤 배가 뒤틀리듯 아프다.", places=W, biomes=("savanna", "jungle")),
+    E("lucky", "유목민 가족이 멀리서 손짓하며 부른다.", places=W, biomes=("savanna", "desert", "alpine"), time="day"),
+    E("lucky", "동물들이 모여드는 물웅덩이를 찾았다.", places=W, biomes=("savanna",)),
+    E("lucky", "거대한 바오밥나무 아래 그늘이 넓다.", places=W, biomes=("savanna",), time="day"),
+    E("neutral", "독수리 떼가 한곳을 맴돌고 있다. 그 아래 사체가 있고, 맹수도 있을지 모른다.", places=W,
+      biomes=("savanna", "desert"), time="day"),
+    E("neutral", "흙길에 타이어 자국이 선명하게 나 있다.", places=W, biomes=("savanna", "desert", "forest")),
+
+    # ===== 온대림 · 냉대림 =====
+    E("danger", "새끼를 데린 멧돼지와 정면으로 마주쳤다.", places=W, biomes=("forest",)),
+    E("danger", "덤불 너머에서 곰이 일어서서 냄새를 맡고 있다.", places=W, biomes=("forest",), season=("봄", "여름", "가을")),
+    E("danger", "먹음직스러운 버섯 군락을 발견했지만 독버섯일 수도 있다.", places=W, biomes=("forest", "jungle"),
+      season=("여름", "가을", "우기")),
+    E("danger", "비에 젖은 몸이 떨리기 시작한다. 저체온증이 걱정된다.", places=W, weather=("rain", "storm"), temp="cold"),
+    E("danger", "비에 젖은 몸이 식으며 한기가 든다.", places=W, biomes=("forest", "alpine"), weather=("rain",), temp="mild"),
+    E("danger", "다리에 진드기가 여러 마리 붙어 있다.", places=W, biomes=("forest", "savanna"), season=("봄", "여름")),
+    E("danger", "날이 저물어 나무와 나무가 구별되지 않는다. 길을 잃기 쉽다.", places=W, biomes=("forest", "jungle"),
+      time="night"),
+    E("danger", "낙엽에 덮인 비탈에서 미끄러져 굴렀다.", places=W, biomes=("forest",)),
+    E("lucky", "산딸기 덤불이 열매를 잔뜩 달고 있다.", places=W, biomes=("forest",), season=("여름",)),
+    E("lucky", "땅에 떨어진 밤과 도토리가 수북하다.", places=W, biomes=("forest",), season=("가을",)),
+    E("lucky", "등산객이 떨어뜨린 지갑에서 현금을 발견했다.", places=W, biomes=("forest", "alpine")),
+    E("lucky", "맑은 물이 흐르는 계곡을 발견했다.", places=W, biomes=("forest", "jungle")),
+    E("neutral", "숲 사이로 오래된 임도가 이어져 있다.", places=W, biomes=("forest",)),
+
+    # ===== 야생 공통 =====
+    E("lucky", "누군가 버리고 간 배낭을 발견했다.", places=W),
+    E("lucky", "빗물을 받아 둘 수 있겠다.", places=W, weather=("rain",)),
+    E("neutral", "멀리서 연기가 가늘게 피어오른다. 사람이 있다는 뜻이다.", places=W, time="day"),
+    E("neutral", "어둠 너머 멀리에서 희미한 불빛 하나가 깜빡인다.", places=W, time="night"),
+    E("neutral", "스마트폰에 아주 약한 신호가 잠깐 잡혔다.", places=W),
+    E("danger", "발을 헛디뎌 발목을 접질렸다.", places=W),
+    E("danger", "어둠 속에서 돌부리에 걸려 넘어졌다.", places=W, time="night"),
+    E("danger", "짙은 안개가 내려앉아 방향을 잃었다.", places=W, weather=("fog",)),
+    E("danger", "가까운 곳에 벼락이 떨어졌다. 귀가 먹먹하다.", places=W, weather=("storm",)),
+
+    # ===== 마을 =====
+    E("danger", "사나운 개 떼가 이를 드러내며 짖어 댄다.", places=TOWN),
+    E("danger", "마을 사람들이 낯선 당신을 경계하며 마을을 떠나라고 손짓한다.", places=TOWN),
+    E("danger", "우물물이 탁하다. 마신 뒤 속이 좋지 않다.", places=TOWN),
+    E("danger", "술에 취한 남자가 시비를 걸어온다.", places=SETTLED, time="night"),
+    E("danger", "손전등을 든 마을 자경단이 당신을 불러 세운다.", places=TOWN, time="night"),
+    E("lucky", "밭일을 도와주면 먹을 것과 잠자리를 주겠다는 농부를 만났다.", places=TOWN, time="day"),
+    E("lucky", "노부부가 집 앞에서 따뜻한 음식을 나눠 주겠다고 한다.", places=TOWN),
+    E("lucky", "오늘은 장날이다. 물건을 사고팔 수 있다.", places=TOWN, time="day"),
+    E("lucky", "처마 밑에서 함께 비를 피하던 주민이 큰 도시로 가는 길을 알려 준다.", places=TOWN, weather=("rain", "storm")),
+    E("neutral", "정류장 기둥에 낡은 버스 시간표가 붙어 있다.", places=TOWN, time="day"),
+    E("neutral", "짐을 가득 실은 트럭이 장터에서 출발 준비를 하고 있다.", places=TOWN, time="day"),
+
+    # ===== 도시 =====
+    E("danger", "붐비는 시장에서 누군가 주머니를 더듬는다. 소매치기다.", places=CITY, time="day"),
+    E("danger", "오토바이를 탄 날치기가 가방을 노리고 다가온다.", places=CITY, time="day"),
+    E("danger", "어두운 뒷골목에서 두 남자가 길을 막아선다.", places=CITY, time="night"),
+    E("danger", "현지 경찰이 신분증을 보여 달라고 한다.", places=SETTLED),
+    E("danger", "길거리 음식을 먹고 속이 뒤틀린다.", places=CITY),
+    E("danger", "택시 기사가 터무니없는 요금을 부르며 내리지 못하게 한다.", places=CITY),
+    E("danger", "시위 행렬이 거리를 메우고 경찰과 대치하고 있다.", places=CITY, time="day"),
+    E("danger", "노숙하려던 자리에서 경비원이 거칠게 쫓아낸다.", places=CITY, time="night"),
+    E("lucky", "한국인 여행자가 한국어를 듣고 반갑게 말을 걸어왔다.", places=CITY),
+    E("lucky", "골목 끝에 한글 간판의 한국 식당이 보인다.", places=CITY),
+    E("lucky", "무료 와이파이가 되는 카페를 찾았다. 스마트폰을 충전할 수 있을지도 모른다.", places=CITY),
+    E("lucky", "항구에서 짐 나르기 일당을 준다는 사람이 있다.", places=CITY, time="day"),
+    E("lucky", "교회 앞에서 무료 급식을 나눠 주고 있다.", places=CITY),
+    E("neutral", "환전소와 장거리 버스 매표소가 나란히 있다.", places=CITY, time="day"),
+    E("neutral", "벽에 공항행 셔틀버스 광고가 붙어 있다.", places=CITY),
+
+    # ===== 실내 (야생의 오두막·동굴) =====
+    E("danger", "쌓인 눈 무게에 오두막 지붕이 삐걱거리며 내려앉기 시작한다.", places=W, indoor=True,
+      weather=("snow", "storm")),
+    E("danger", "동굴 안쪽 어둠에서 짐승의 냄새와 거친 숨소리가 난다.", places=W, indoor=True),
+    E("danger", "피워 둔 불의 연기가 빠지지 않아 숨이 막힌다.", places=W, indoor=True),
+    E("danger", "쥐가 배낭을 뚫고 먹을 것을 갉아 먹었다.", places=W + SETTLED, indoor=True, time="night"),
+    E("lucky", "선반 구석에서 유통기한이 지나지 않은 통조림을 찾았다.", places=W, indoor=True),
+    E("lucky", "벽에 이 일대의 낡은 지도가 걸려 있다.", places=W + TOWN, indoor=True),
+    E("lucky", "구석에 두꺼운 모포가 개켜져 있다.", places=W, indoor=True, temp="cold"),
+    # ===== 실내 (마을·도시의 건물) =====
+    E("danger", "주인이 의심스러운 눈으로 보더니 당장 나가라고 소리친다.", places=SETTLED, indoor=True),
+    E("lucky", "주인이 말없이 따뜻한 차 한 잔을 내준다.", places=SETTLED, indoor=True, temp="cold"),
+    E("lucky", "벽 게시판에 '일손 구함' 쪽지가 붙어 있다.", places=SETTLED, indoor=True),
+    E("neutral", "TV 뉴스에서 이 지역의 도로 통제 소식이 나온다.", places=SETTLED, indoor=True),
 ]
 
-BIOME_EVENTS = {
-    "snow": [
-        ("danger", "눈보라가 몰아치기 시작했다."),
-        ("danger", "손끝의 감각이 없어지고 있다. 동상 초기 증상이다."),
-        ("danger", "발밑의 얼음이 갈라지는 소리가 난다."),
-        ("lucky", "사냥꾼이 쓰던 빈 오두막을 발견했다."),
-        ("neutral", "눈 위에 큰 짐승의 발자국이 나 있다."),
-    ],
-    "alpine": [
-        ("danger", "머리가 깨질 듯 아프다. 고산병 증세다."),
-        ("danger", "위쪽에서 돌이 굴러떨어진다."),
-        ("danger", "기온이 급격히 떨어지고 있다."),
-        ("lucky", "산악인들이 남긴 비상식량 캐시를 발견했다."),
-        ("neutral", "양 떼를 모는 목동이 멀리 보인다."),
-    ],
-    "desert": [
-        ("danger", "모래폭풍이 다가오고 있다."),
-        ("danger", "전갈이 신발 근처를 기어 다닌다."),
-        ("danger", "극심한 더위에 어지럼증이 몰려온다."),
-        ("lucky", "야자수가 있는 작은 오아시스가 보인다."),
-        ("neutral", "낙타를 끌고 가는 대상 행렬이 지평선에 보인다."),
-    ],
-    "jungle": [
-        ("danger", "독사가 덤불 속에서 고개를 들었다."),
-        ("danger", "갑자기 스콜이 쏟아져 온몸이 젖었다."),
-        ("danger", "모기떼에 물린 자리가 부어오른다."),
-        ("lucky", "잘 익은 야생 과일나무를 발견했다."),
-        ("neutral", "강 건너편에 나룻배가 묶여 있다."),
-    ],
-    "savanna": [
-        ("danger", "멀리서 맹수의 울음소리가 들린다."),
-        ("danger", "마른 풀밭에 들불이 번지고 있다."),
-        ("danger", "마신 물 때문인지 배가 심하게 아프다."),
-        ("lucky", "유목민 가족이 손짓하며 부른다."),
-        ("neutral", "흙길에 타이어 자국이 선명하게 나 있다."),
-    ],
-    "forest": [
-        ("danger", "야생 멧돼지와 마주쳤다."),
-        ("danger", "비에 젖은 몸이 떨린다. 저체온증이 걱정된다."),
-        ("danger", "먹음직스러운 버섯을 발견했지만 독버섯일 수도 있다."),
-        ("lucky", "등산객이 떨어뜨린 지갑에서 현금을 발견했다."),
-        ("neutral", "숲 사이로 오래된 임도가 이어져 있다."),
-    ],
-}
+# ---------- 긍정 이벤트 보강 ----------
+# 모두 물·식량·체온·휴식·길 찾기·돈·이동 중 하나에 실제로 도움이 되는 것들이다.
+EVENTS += [
+    # ===== 설원 =====
+    E("lucky", "얼음 위에 낚시꾼이 뚫어 놓은 구멍과 버려진 낚싯줄이 있다. 물고기를 잡을 수 있겠다.",
+      places=W, biomes=("snow",), time="day"),
+    E("lucky", "바람에 눈이 단단히 다져진 언덕이 있다. 눈굴을 파기에 좋다.", places=W, biomes=("snow",)),
+    E("lucky", "말라 죽은 관목이 눈 위로 삐죽 나와 있다. 불쏘시개로 쓸 수 있다.", places=W, biomes=("snow", "alpine")),
+    E("lucky", "멀리서 개 썰매 방울 소리가 들린다. 사람이 오가는 길이 가깝다.", places=W, biomes=("snow",), time="day"),
+    E("lucky", "흐린 하늘이 걷히자 해가 낮게 떠 남쪽 방향이 분명해졌다.", places=W, biomes=("snow", "alpine", "forest"),
+      time="day", weather=("clear",)),
 
-TOWN_EVENTS = [
-    ("danger", "소매치기가 주머니를 노리고 있다."),
-    ("danger", "현지 경찰이 신분증을 요구한다."),
-    ("danger", "길거리 음식을 먹고 속이 좋지 않다."),
-    ("lucky", "한국어를 조금 할 줄 아는 현지인을 만났다."),
-    ("lucky", "일당을 주는 짐 나르기 일을 제안받았다."),
-    ("lucky", "한국인 여행자가 도와주겠다고 말을 걸어왔다."),
-    ("neutral", "시장 한쪽에 환전소와 버스 매표소가 보인다."),
+    # ===== 고산 =====
+    E("lucky", "바람이 닿지 않는 양지바른 바위 아래가 따뜻하다. 몸을 녹이며 쉴 수 있다.",
+      places=W, biomes=("alpine",), time="day"),
+    E("lucky", "능선 위에서 계곡 아래 마을의 지붕들이 내려다보인다.", places=W, biomes=("alpine",), time="day",
+      weather=("clear",)),
+    E("lucky", "누군가 바위에 붉은 페인트로 길 표시를 해 두었다. 하산로다.", places=W, biomes=("alpine",)),
+    E("lucky", "어둠 속 아래쪽 계곡에 마을 불빛이 몇 개 반짝인다. 방향을 잡을 수 있다.",
+      places=W, biomes=("alpine", "forest", "desert", "savanna"), time="night", weather=("clear",)),
+
+    # ===== 사막 =====
+    E("lucky", "새벽 냉기에 바위와 천 위에 이슬이 맺혔다. 천으로 훔쳐 짜면 마실 물이 된다.",
+      places=W, biomes=("desert", "savanna"), time="night"),
+    E("lucky", "모래에 반쯤 묻힌 플라스틱 물통을 찾았다. 안에 물이 조금 남아 있다.", places=W, biomes=("desert",)),
+    E("lucky", "선인장처럼 물을 머금은 다육식물 군락이 있다.", places=W, biomes=("desert",)),
+    E("lucky", "멀리 송전탑이 일렬로 서 있다. 따라가면 도로나 마을이 나온다.", places=W, biomes=("desert", "savanna", "snow")),
+    E("lucky", "모래 위에 덤불 그림자가 길게 드리워 방향을 읽을 수 있다.", places=W, biomes=("desert",), time="day"),
+    E("lucky", "해가 지자 열기가 가셔 걷기 좋은 시간이 되었다. 밤하늘 별이 길잡이가 된다.",
+      places=W, biomes=("desert",), time="night", weather=("clear",)),
+
+    # ===== 열대우림 =====
+    E("lucky", "커다란 잎이 우산처럼 겹친 곳 아래로 빗물이 줄줄 흘러내린다. 받아 마시기 좋다.",
+      places=W, biomes=("jungle",), weather=("rain", "storm")),
+    E("lucky", "코코넛이 달린 야자나무가 있다. 과즙과 과육을 얻을 수 있다.", places=W, biomes=("jungle", "savanna")),
+    E("lucky", "강가에 반쯤 물에 잠긴 통나무들이 있다. 엮으면 뗏목이 된다.", places=W, biomes=("jungle", "forest")),
+    E("lucky", "칼로 낸 표시가 나무줄기마다 이어져 있다. 원주민이나 채집꾼의 길이다.", places=W, biomes=("jungle",)),
+    E("lucky", "강물 소리가 들린다. 하류로 가면 사람 사는 곳이 나올 가능성이 크다.",
+      places=W, biomes=("jungle", "forest", "alpine")),
+
+    # ===== 사바나 =====
+    E("lucky", "개코원숭이 무리가 땅을 파헤치는 곳을 보니 얕게 고인 지하수가 있다.", places=W, biomes=("savanna",), time="day"),
+    E("lucky", "모닥불 흔적과 아직 따뜻한 재가 남아 있다. 사람이 막 떠난 자리다.", places=W, biomes=("savanna", "desert", "forest")),
+    E("lucky", "가시나무로 둥글게 울타리를 친 빈 가축우리가 있다. 맹수를 피해 밤을 보내기 좋다.",
+      places=W, biomes=("savanna",), time="night"),
+    E("lucky", "멀리 목동이 모는 소 떼의 방울 소리가 들린다. 아침이면 마을로 돌아갈 것이다.",
+      places=W, biomes=("savanna",), time="night"),
+    E("lucky", "마른 소똥이 넓게 흩어져 있다. 잘 타는 연료가 된다.", places=W, biomes=("savanna", "alpine", "desert")),
+
+    # ===== 숲 =====
+    E("lucky", "덫에 걸린 토끼가 있다. 누군가 놓아둔 올무다.", places=W, biomes=("forest", "snow")),
+    E("lucky", "자작나무 껍질이 잔뜩 벗겨져 있다. 젖어도 불이 잘 붙는 불쏘시개다.", places=W, biomes=("forest", "snow")),
+    E("lucky", "벌목꾼들이 쓰던 임시 천막이 비어 있다. 비를 피할 수 있다.", places=W, biomes=("forest", "jungle"),
+      weather=("rain", "storm")),
+    E("lucky", "쓰러진 나무 밑동이 바람을 막아 주는 아늑한 자리를 만들었다.", places=W, biomes=("forest",), time="night"),
+    E("lucky", "개울에 송어가 그림자처럼 머물러 있다. 손으로도 잡을 수 있을 것 같다.",
+      places=W, biomes=("forest", "alpine"), season=("봄", "여름", "가을")),
+
+    # ===== 야생 공통 =====
+    E("lucky", "밤새 내린 비로 바위 웅덩이마다 깨끗한 물이 찰랑거린다.", places=W, weather=("rain",), time="day"),
+    E("lucky", "멀리서 엔진 소리가 들린다. 차가 다니는 길이 가까이 있다.", places=W, time="day"),
+    E("lucky", "바람이 잦아들고 하늘이 맑게 갰다. 오늘은 멀리까지 걸을 수 있겠다.", places=W, weather=("clear",), temp="mild"),
+
+    # ===== 마을 (낮) =====
+    E("lucky", "마을 사람이 당신의 사정을 듣고 이웃 마을까지 가는 오토바이를 태워 주겠다고 한다.",
+      places=TOWN, time="day"),
+    E("lucky", "집집마다 돌아다니며 물을 나르는 아이들이 마을 공동 우물 위치를 알려 준다.", places=TOWN, time="day"),
+    E("lucky", "가지고 있는 물건을 먹을 것과 바꾸자는 상인이 있다.", places=TOWN),
+    E("lucky", "마을 진료소가 문을 열었다. 간단한 치료를 받을 수 있다.", places=TOWN, time="day"),
+    # ===== 마을 (밤) =====
+    E("lucky", "늦게까지 불이 켜진 집에서 노인이 손짓하며 들어와 몸을 녹이라고 한다.", places=TOWN, time="night"),
+    E("lucky", "마을 사원(교회·모스크)의 문이 열려 있다. 나그네가 하룻밤 머무는 것을 허락하는 곳이다.",
+      places=TOWN, time="night"),
+    E("lucky", "밤늦게 들어온 화물차 기사가 내일 새벽 큰 도시로 떠난다며 자리가 있다고 한다.",
+      places=TOWN, time="night"),
+    E("lucky", "모닥불가에 모인 마을 사람들이 남은 음식을 나눠 준다.", places=TOWN, time="night"),
+
+    # ===== 도시 =====
+    E("lucky", "광장에 무료 공공 충전대가 있다. 스마트폰을 충전하면 가족에게 연락할 수 있을지 모른다.",
+      places=CITY),
+    E("lucky", "광장 한쪽에서 관광객 안내소가 무료 지도와 대사관 위치를 알려 준다.", places=CITY, time="day"),
+    E("lucky", "식당 주인이 설거지를 도와주면 한 끼와 약간의 돈을 주겠다고 한다.", places=CITY),
+    E("lucky", "24시간 여는 기차역 대합실은 밤새 따뜻하고 경비가 있어 비교적 안전하다.", places=CITY, time="night"),
+    E("lucky", "야시장 상인이 문 닫기 전 남은 음식을 헐값에 판다.", places=CITY, time="night"),
+    E("lucky", "중고 물건 가게에서 쓸 만한 물건을 사 주겠다고 한다.", places=CITY, time="day"),
+
+    # ===== 야생의 실내 (오두막·동굴) =====
+    E("lucky", "난로 옆에 마른 장작이 한 아름 쌓여 있다.", places=W, indoor=True),
+    E("lucky", "구석에서 녹슬었지만 쓸 만한 냄비를 찾았다. 물을 끓일 수 있다.", places=W, indoor=True),
+    E("lucky", "지붕 홈통 아래 빗물받이 통에 물이 가득하다.", places=W, indoor=True, weather=("rain", "storm")),
+    E("lucky", "벽에 이전에 머문 사람이 남긴 메모가 있다. 가장 가까운 마을까지의 방향과 거리가 적혀 있다.",
+      places=W, indoor=True),
+    E("lucky", "바람과 눈을 완전히 막아 주는 깊고 마른 공간이다. 오랜만에 깊이 잘 수 있겠다.",
+      places=W, indoor=True, time="night"),
+    E("lucky", "선반 위 상자에 붕대와 소독약이 남아 있다.", places=W + TOWN, indoor=True),
+    # ===== 마을·도시의 실내 =====
+    E("lucky", "가게 주인이 휴대폰 충전을 해 주겠다고 한다.", places=SETTLED, indoor=True, time="day"),
+    E("lucky", "숙소 주인이 일을 도우면 숙박비를 받지 않겠다고 한다.", places=SETTLED, indoor=True),
+    E("lucky", "식당 TV에서 한국 대사관의 해외 조난자 지원 안내가 나온다. 연락처를 받아 적었다.",
+      places=SETTLED, indoor=True),
+    E("lucky", "옆자리 트럭 기사가 내일 아침 당신이 가려는 방향으로 간다고 말한다.", places=SETTLED, indoor=True),
+    E("lucky", "주인이 남은 수프를 데워 내준다.", places=SETTLED, indoor=True, time="night"),
 ]
 
 # 위험 등급(0 안전, 1 주의, 2 위험)별 이벤트 발생 확률과 '위험 이벤트' 비중
@@ -133,18 +352,49 @@ EVENT_CHANCE = {0: 0.20, 1: 0.40, 2: 0.60}
 DANGER_SHARE = {0: 0.25, 1: 0.50, 2: 0.75}
 
 
-def roll_event(biome, place_type, risk_level, rng=random):
-    """이번 턴에 일어날 이벤트를 뽑는다. 아무 일도 없으면 None."""
+def matches(event, place_type, biome, context):
+    """이벤트의 조건이 지금 상황과 맞는지."""
+    c = context or {}
+    if place_type not in event.get("places", W):
+        return False
+    if event.get("biomes") and biome not in event["biomes"]:
+        return False
+    if bool(event.get("indoor", False)) != bool(c.get("indoor", False)):
+        return False
+    if "time" in event and event["time"] != ("night" if c.get("night") else "day"):
+        return False
+    if "weather" in event and c.get("weather", "clear") not in event["weather"]:
+        return False
+    if "temp" in event:
+        feels = c.get("temp", 15)
+        band = "hot" if feels >= 30 else ("cold" if feels <= 0 else "mild")
+        if event["temp"] != band:
+            return False
+    if "season" in event and c.get("season") and c["season"] not in event["season"]:
+        return False
+    return True
+
+
+def candidates(place_type, biome, context=None):
+    return [e for e in EVENTS if matches(e, place_type, biome, context)]
+
+
+def roll_event(biome, place_type, risk_level, rng=random, context=None):
+    """이번 턴에 일어날 이벤트를 지금 상황(장소·지형·시간·날씨·기온·실내외·계절)에 맞게 뽑는다.
+
+    날씨·시간처럼 구체적인 조건이 붙은 이벤트일수록 지금 상황을 잘 드러내므로 더 잘 뽑힌다.
+    아무 일도 없으면 None.
+    """
     if rng.random() > EVENT_CHANCE.get(risk_level, 0.3):
         return None
-    pool = TOWN_EVENTS if place_type in ("마을", "도시") else BIOME_EVENTS[biome] + COMMON_EVENTS
+    pool = candidates(place_type, biome, context)
+    if not pool:
+        return None
     want_danger = rng.random() < DANGER_SHARE.get(risk_level, 0.5)
-    if want_danger:
-        candidates = [e for e in pool if e[0] == "danger"]
-    else:
-        candidates = [e for e in pool if e[0] != "danger"]
-    kind, text = rng.choice(candidates or pool)
-    return {"kind": kind, "text": text}
+    chosen = [e for e in pool if (e["kind"] == "danger") == want_danger] or pool
+    weights = [1 + sum(k in e for k in ("time", "weather", "temp", "season")) * 1.5 for e in chosen]
+    event = rng.choices(chosen, weights=weights, k=1)[0]
+    return {"kind": event["kind"], "text": event["text"]}
 
 
 # ---------- 대형 이벤트(기회) ----------

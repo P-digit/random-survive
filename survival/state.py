@@ -1,11 +1,13 @@
 """게임 상태와 규칙(엔진). 숫자 계산은 전부 여기서 하고, LLM은 서술만 담당한다."""
+import math
 import random
 import re
 from dataclasses import dataclass, field
 
 from . import climate as climate_api
 from . import geo
-from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, LAND_METHODS,
+from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CRIMES,
+                     DIURNAL_AMPLITUDE, LAND_METHODS, WITNESS,
                      MAJOR_EVENT_CHANCE, VEHICLES, WANTED_AIRPORT_LIMIT, WANTED_DECAY_PER_HOUR,
                      WANTED_ON_FAIL, WANTED_ON_SUCCESS,
                      MAJOR_EVENT_PITY_TURNS, START_ITEMS, START_MONEY, TRAVEL_RULES,
@@ -13,7 +15,7 @@ from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, LAN
 from .events import (BIOME_HAZARDS, BIOMES, classify_biome, roll_event,
                      roll_major_event)
 from .risk_model import predict_risk
-from .weather import get_weather
+from .weather import get_weather, weather_category
 
 
 def clamp(value, low=0.0, high=100.0):
@@ -62,7 +64,10 @@ class GameState:
     energy: float = 80.0              # 기력
     money: float = START_MONEY
     items: list = field(default_factory=lambda: list(START_ITEMS))
-    start_hour: int = 12              # 시작 시각(현지 시간)
+    start_hour: int = 12              # 시작 시각(출발지 현지 시간)
+    start_offset: float = 0.0         # 출발지의 UTC 시차(시간)
+    utc_offset: float = 0.0           # 지금 있는 곳의 UTC 시차. 시계는 현재 위치의 현지 시각을 보여 준다
+    diurnal: dict = field(default_factory=dict)          # 예보가 없을 때 낮밤 기온을 만드는 기준값
     elapsed_hours: float = 0.0
     start_distance: float = 0.0
     distance: float = 0.0             # 한국까지 남은 거리
@@ -102,7 +107,8 @@ class GameState:
     # ---------- 시간 ----------
     @property
     def hour(self):
-        return int(self.start_hour + self.elapsed_hours) % 24
+        """지금 있는 곳의 현지 시각. 시간대가 다른 곳으로 이동하면 시계도 그곳에 맞춰진다."""
+        return int(math.floor(self.start_hour - self.start_offset + self.utc_offset + self.elapsed_hours)) % 24
 
     @property
     def day(self):
@@ -157,17 +163,50 @@ class GameState:
 
     # ---------- 날씨 ----------
     def set_weather(self, weather):
-        """새 위치의 날씨를 적용한다. 시간별 예보는 따로 보관한다."""
+        """새 위치의 날씨를 적용한다. 시간별 예보는 따로 보관하고, 게임 시계와 맞춘다."""
         weather = dict(weather)
         self.forecast = weather.pop("hourly", [])
+        self.utc_offset = float(weather.pop("utc_offset", self.utc_offset))
         self.weather = weather
-        self.sync_weather()   # 예보의 0번은 '게임 시작 시각'이므로, 지금까지 흐른 시간만큼 건너뛴다
+        # 예보 0번의 현지 시각과 게임의 현지 시각을 맞춘다: forecast[k] 가 지금 시각이 되도록
+        first = self.forecast[0].get("hour") if self.forecast else None
+        k = (self.hour - first) % 24 if first is not None else 0
+        self.weather_origin = self.elapsed_hours - k
+        # 예보가 없으면 지금 기온을 기준으로 하루 기온 곡선을 만든다
+        amp = DIURNAL_AMPLITUDE.get(self.biome, 6) * (0.6 if weather.get("humidity", 50) >= 80 else 1.0)
+        shape = math.cos(2 * math.pi * (self.hour - 15) / 24)     # 오후 3시 최고, 새벽 3시 최저
+        self.diurnal = {"mean": weather["temperature"] - amp * shape, "amp": amp,
+                        "feels_gap": weather["feels_like"] - weather["temperature"]}
+        self.sync_weather()
 
     def sync_weather(self):
-        """게임 속 시간이 흐른 만큼 예보에서 그 시각의 날씨를 꺼내 적용한다. (밤에는 추워진다)"""
+        """게임 속 시간에 맞는 날씨를 적용한다. 밤에는 추워지고 낮에는 기온이 오른다.
+
+        예보 범위 안이면 그 시각의 예보를, 범위를 넘으면 마지막 하루의 같은 시각 값을,
+        예보가 아예 없으면 지형별 일교차 곡선으로 만든 값을 쓴다.
+        """
         if self.forecast:
-            index = min(int(self.elapsed_hours - self.weather_origin), len(self.forecast) - 1)
-            self.weather.update(self.forecast[max(0, index)])
+            index = int(self.elapsed_hours - self.weather_origin)
+            n = len(self.forecast)
+            if index >= n:
+                if n >= 24:     # 예보가 끝나면 마지막 하루의 같은 시각 값을 되풀이한다
+                    index = (n - 24) + (index - (n - 24)) % 24
+                else:
+                    index = n - 1
+            self.weather.update({k: v for k, v in self.forecast[max(0, index)].items() if k != "hour"})
+        elif self.diurnal:
+            d = self.diurnal
+            temp = d["mean"] + d["amp"] * math.cos(2 * math.pi * (self.hour - 15) / 24)
+            self.weather["temperature"] = round(temp, 1)
+            self.weather["feels_like"] = round(temp + d["feels_gap"], 1)
+        self.weather["is_day"] = not self.is_night
+
+    def event_context(self):
+        """돌발 이벤트를 고르는 데 쓰는 지금 상황."""
+        return {"night": self.is_night, "indoor": self.indoor,
+                "weather": weather_category(self.weather.get("code", 0)),
+                "temp": self.weather.get("feels_like", 15),
+                "season": (self.climate or {}).get("season")}
 
     # ---------- 규칙 ----------
     def pass_time(self, hours, activity="other", sheltered=False):
@@ -248,7 +287,10 @@ class GameState:
         self.satiety = clamp(self.satiety + clamp(satiety, -40, 60))
         self.hydration = clamp(self.hydration + clamp(hydration, -40, 60))
         self.energy = clamp(self.energy + clamp(energy, -40, 40))
+        before = self.money
         self.money = round(max(0.0, self.money + clamp(money, -100000, 120)), 2)
+        if self.money < before:
+            self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + before - self.money
         self._check_death(reason or "치명적인 부상을 입었다")
 
     def find_item(self, name):
@@ -307,10 +349,12 @@ class GameState:
         return rejected
 
     # ---------- 자유 행동 ----------
-    def attempt(self, action, difficulty="normal", illegal=False, violent=False, item="", stealth=False):
+    def attempt(self, action, difficulty="normal", crime="none", witnessed="none", violent=False,
+                item="", stealth=False):
         """결과가 불확실한 행동을 판정한다. 성공 확률은 엔진이 계산하고 주사위를 굴린다.
 
-        GM은 난이도와 성격(불법/폭력)만 정하고, 성공 여부는 정하지 못한다.
+        GM은 난이도, 범죄 종류, 목격자, 폭력 여부만 정하고 성공 여부는 정하지 못한다.
+        수배도는 현실에서 범죄인 행동을 누군가 목격했을 때만 오른다.
         """
         if self.turn_flags.get("attempt"):
             return {"error": "이번 턴에는 이미 시도 판정을 했다. 한 턴에는 시도 하나만 판정한다."}
@@ -339,18 +383,38 @@ class GameState:
             self.health = clamp(self.health - damage)
             effects.append(f"몸싸움 끝에 체력 -{damage}")
             self._check_death("무모한 시도가 마지막이 되었다")
-        if illegal:
-            gain = WANTED_ON_SUCCESS if success else WANTED_ON_FAIL
-            self.wanted = clamp(self.wanted + gain)
-            effects.append(f"수배도 +{gain} (현재 {self.wanted:.0f})")
+        crime = crime if crime in CRIMES else "none"
+        witnessed = witnessed if witnessed in WITNESS else "none"
+        if crime != "none":
+            if not success and witnessed == "none":
+                witnessed = "victim"       # 실패하면 들키기 마련이다 (피해자·관계자가 알아챔)
+            gain = round((WANTED_ON_SUCCESS if success else WANTED_ON_FAIL) * CRIMES[crime] * WITNESS[witnessed])
+            if gain > 0:
+                self.wanted = clamp(self.wanted + gain)
+                effects.append(f"{crime} 목격됨 → 수배도 +{gain} (현재 {self.wanted:.0f})")
+            else:
+                effects.append(f"{crime} — 목격자 없음, 수배되지 않음")
         self.turn_flags["attempt"] = {"action": str(action)[:40], "chance": chance, "success": success,
-                                      "illegal": bool(illegal), "effects": effects}
+                                      "illegal": crime != "none", "crime": crime, "effects": effects}
         return {"success": success, "chance": f"{chance * 100:.0f}%", "보정": reasons or ["없음"],
                 "엔진이_적용한_결과": effects or ["없음"],
                 "안내": ("성공했다. 성공의 결과(차량 획득은 acquire_vehicle, 돈·물건은 update_status/"
                         "update_inventory)를 툴로 반영하고 서술하라." if success else
                         "실패했다. 목표를 이루지 못했다. 실패를 그대로 서술하고, 상대의 반응(반격, 신고, 도주)을 "
                         "현실적으로 그려라. 이미 엔진이 적용한 피해를 다시 적용하지 마라.")}
+
+    def pay(self, amount, purpose=""):
+        """물건·서비스 값을 낸다. 돈이 모자라면 아무것도 내지 않고 실패한다."""
+        amount = round(max(0.0, float(amount)), 2)
+        if amount <= 0:
+            return {"success": False, "message": "낼 금액이 0이다."}
+        if amount > self.money:
+            return {"success": False,
+                    "message": f"돈이 모자란다. {purpose or '값'} ${amount:.0f}, 가진 돈 ${self.money:.0f}. "
+                               "사지 못했다고 서술하라."}
+        self.money = round(self.money - amount, 2)
+        self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + amount
+        return {"success": True, "message": f"{purpose or '값'}으로 ${amount:.0f}을(를) 냈다. 남은 돈 ${self.money:.0f}."}
 
     def acquire_vehicle(self, kind, name=""):
         """탈것을 손에 넣는다. 같은 턴에 성공한 시도(탈취, 구매 협상 등)가 있어야 한다."""
@@ -450,6 +514,7 @@ class GameState:
             return {"success": False,
                     "message": f"돈이 부족하다. {rule['label']} {km:.0f}km 요금 ${cost:.0f}, 보유 ${self.money:.0f}."}
         self.money = round(self.money - cost, 2)
+        self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + cost
         item = "한국행 항공권" if method == "flight" else f"{rule['label']} 티켓({km:.0f}km)"
         self.tickets.append({"method": method, "km": round(km), "item": item, "price": cost})
         self.items.append(item)
@@ -500,6 +565,8 @@ class GameState:
                                "도시에서 배나 비행기를 타거나, 더 짧은 거리를 이동해야 한다."}
 
         self.money = round(self.money - cost, 2)
+        if cost:
+            self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + cost
         if ticket:             # 표는 타는 순간 쓰고 없어진다
             self.tickets.remove(ticket)
             if ticket["item"] in self.items:
@@ -651,13 +718,11 @@ class GameState:
         self.refresh_risk()
         # 극한 지형의 야생에서는 이벤트 판정을 한 단계 더 위험하게 한다
         level = min(2, self.risk["level"] + 1) if self.in_extreme_wild else self.risk["level"]
-        self.event = roll_event(self.biome, self.place_type, level)
+        self.event = roll_event(self.biome, self.place_type, level, context=self.event_context())
         if self.place_type in ("마을", "도시") and self.wanted >= 20 and random.random() < self.wanted / 150:
             self.event = {"kind": "danger",
                           "text": "경찰이 수배 전단 속 얼굴과 당신을 번갈아 보더니 다가온다."
                                   + (" 당신이 몰고 온 차량도 신고된 것이다." if self.vehicle and self.vehicle.get("stolen") else "")}
-        if self.indoor and self.place_type == "야생":
-            self.event = None            # 동굴·오두막 안에서는 야외 이벤트(눈보라, 짐승 등)가 직접 닥치지 않는다
         # 대형 이벤트(기회): 확률로 발생하고, 오래 안 나오면 반드시 나온다
         waited = self.turn - self.last_major_turn
         if self.offer is None and self.turn >= 3 and (
@@ -721,6 +786,8 @@ def create_game():
         weather=dict(weather),
         biome=classify_biome(lat, weather),
         start_hour=weather["local_hour"],
+        start_offset=float(weather.get("utc_offset", 0)),
+        utc_offset=float(weather.get("utc_offset", 0)),
         start_distance=distance, distance=distance,
     )
     state.set_weather(weather)

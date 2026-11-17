@@ -2,7 +2,7 @@
 import json
 
 from . import knowledge
-from .config import TRAVEL_RULES
+from .config import CRIMES, TRAVEL_RULES
 
 
 def _function(name, description, properties):
@@ -42,13 +42,14 @@ TOOLS = [
     _function(
         "update_status",
         "행동이나 이벤트의 결과로 플레이어 수치를 변화시킨다. 변화가 없는 항목은 0을 넣는다. "
-        "예: 물을 마심 hydration +30, 넘어져 다침 health -10, 일해서 돈을 범 money +40.",
+        "예: 물을 마심 hydration +30, 넘어져 다침 health -10, 일해서 돈을 범 money +40. "
+        "돈을 '쓰는' 것은 이 툴이 아니라 pay 로 처리한다.",
         {
             "health": {"type": "number", "description": "체력 변화량 (-40~+30)"},
             "satiety": {"type": "number", "description": "포만감 변화량 (-40~+60)"},
             "hydration": {"type": "number", "description": "수분 변화량 (-40~+60)"},
             "energy": {"type": "number", "description": "기력 변화량 (-40~+40)"},
-            "money": {"type": "number", "description": "소지금 변화량(USD). 한 번에 최대 +120"},
+            "money": {"type": "number", "description": "번 돈(USD, 0 이상). 한 번에 최대 +120. 쓴 돈은 pay 로"},
             "consumed_items": {"type": "array", "items": {"type": "string"},
                                "description": "이 행동으로 먹거나 마시거나 써서 없어진 소지품의 이름들. "
                                               "받아 둔 빗물, 딴 열매처럼 환경에서 얻어 소지품에 넣어 둔 것도 "
@@ -100,10 +101,27 @@ TOOLS = [
                            "description": "상황에 따른 난이도. 상대가 경계 중이거나, 무장했거나, 여럿이거나, 플레이어가 "
                                           "맨손이면 어렵게 매긴다. 예: 방심한 사람의 물건 슬쩍하기 normal, "
                                           "깨어 있는 트럭 기사를 맨손으로 제압 hard, 무장 경비원 제압 very_hard"},
-            "illegal": {"type": "boolean", "description": "법에 어긋나는 행동이면 true (수배도가 오른다)"},
+            "crime": {"type": "string", "enum": list(CRIMES.keys()),
+                      "description": "현실에서 범죄로 처벌받는 행동일 때만 그 종류를 고른다. 범죄가 아니면 none. "
+                                     "동물과 싸우기, 정당방위, 야생에서 채집·사냥, 버려진 빈집에서 비 피하기, "
+                                     "흥정, 히치하이킹, 위험한 등반은 범죄가 아니다."},
+            "witnessed": {"type": "string", "enum": ["none", "victim", "bystanders"],
+                          "description": "범죄를 누가 보았나. none: 아무도 못 봄(잠든 사이, 아무도 없는 곳, 들키지 않음), "
+                                         "victim: 피해자만 봄(얼굴을 보았거나 알아챔), bystanders: 주변 사람·CCTV·경비가 봄. "
+                                         "범죄가 아니면 none."},
             "violent": {"type": "boolean", "description": "몸싸움·폭력이 따르는 행동이면 true (실패하면 다친다)"},
             "item": {"type": "string", "description": "이 시도에 쓰는 소지품 이름(다용도 칼 등). 없으면 빈 문자열"},
             "stealth": {"type": "boolean", "description": "몰래 하는 행동이면 true (밤이면 유리하다)"},
+        },
+    ),
+    _function(
+        "pay",
+        "플레이어가 돈을 쓸 때 반드시 호출한다: 물건·음식·물 사기, 숙박비, 뇌물, 택시·나룻배 삯, 수수료, 벌금 등. "
+        "(교통편 표는 buy_ticket, 정해진 노선 이동 요금은 travel 이 알아서 받는다.) 돈이 모자라면 실패하며, "
+        "그때는 사지 못했다고 서술한다. 서술에 값을 적었다면 같은 금액으로 호출한다.",
+        {
+            "amount": {"type": "number", "description": "낼 금액(USD). 그 지역 물가에 맞게"},
+            "purpose": {"type": "string", "description": "무엇에 쓰는지. 예: '생수 2병'"},
         },
     ),
     _function(
@@ -199,8 +217,11 @@ def execute_tool(state, name, arguments, client=None):
             result = {"error": "이번 턴의 시간은 이미 반영되었다. 추가로 시간을 흘리지 말고 결과를 서술하라."}
         elif name == "attempt_action":
             result = state.attempt(args.get("action", ""), args.get("difficulty", "normal"),
-                                   bool(args.get("illegal")), bool(args.get("violent")),
-                                   str(args.get("item", "")), bool(args.get("stealth")))
+                                   str(args.get("crime", "none")), str(args.get("witnessed", "none")),
+                                   bool(args.get("violent")), str(args.get("item", "")),
+                                   bool(args.get("stealth")))
+        elif name == "pay":
+            result = state.pay(args.get("amount", 0), str(args.get("purpose", "")))
         elif name == "acquire_vehicle":
             result = state.acquire_vehicle(args.get("kind"), args.get("name", ""))
         elif name == "arrest":
