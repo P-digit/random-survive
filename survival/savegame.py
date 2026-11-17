@@ -8,9 +8,14 @@ from .state import GameState
 
 SAVE_PATH = SAVE_DIR / "autosave.json"
 
+# 공유 링크로 여러 사람이 동시에 접속할 때는 저장 파일 하나를 함께 쓰게 되므로 꺼 둔다
+ENABLED = True
+
 
 def save(state):
     """턴이 끝날 때마다 호출한다. 게임이 끝났으면(사망/귀환) 저장 파일을 지운다."""
+    if not ENABLED:
+        return
     try:
         if state is None or state.status != "playing":
             delete()
@@ -25,6 +30,8 @@ def save(state):
 
 def load():
     """저장된 게임을 불러온다. 없거나 읽을 수 없으면 None."""
+    if not ENABLED:
+        return None
     try:
         data = json.loads(SAVE_PATH.read_text(encoding="utf-8"))
         names = {f.name for f in fields(GameState)}

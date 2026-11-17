@@ -654,3 +654,16 @@ def test_no_walk_to_korea_suggestion():
     assert not any("한국" in s for s in cleaned) and len(cleaned) == 3 and len(set(cleaned)) == 3
     assert gamemaster.clean_suggestions(["한국행 비행기를 탄다", "a", "b"])[0] == "한국행 비행기를 탄다"
     assert not any("한국" in s for s in gamemaster.DEFAULT_SUGGESTIONS)
+
+
+def test_saving_can_be_disabled_for_share_mode(game, monkeypatch, tmp_path):
+    monkeypatch.setattr(savegame, "SAVE_DIR", tmp_path)
+    monkeypatch.setattr(savegame, "SAVE_PATH", tmp_path / "autosave.json")
+    savegame.save(game)
+    assert savegame.exists()
+    monkeypatch.setattr(savegame, "ENABLED", False)      # python app.py --share
+    assert not savegame.exists() and savegame.load() is None
+    game.health = 1
+    savegame.save(game)                                  # 저장하지도, 기존 파일을 건드리지도 않는다
+    monkeypatch.setattr(savegame, "ENABLED", True)
+    assert savegame.load().health == 100

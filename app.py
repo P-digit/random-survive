@@ -1,9 +1,11 @@
 """랜덤 좌표 생존기 - 실행 파일.
 
-    python app.py
+    python app.py            # 내 컴퓨터에서만 접속
+    python app.py --share    # 다른 사람도 접속할 수 있는 임시 공개 링크 생성 (시연용)
 
 실행 후 터미널에 표시되는 주소(기본 http://127.0.0.1:7860)를 브라우저로 열면 된다.
 """
+import argparse
 import inspect
 
 import gradio as gr
@@ -180,9 +182,18 @@ def build_app():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="랜덤 좌표 생존기")
+    parser.add_argument("--share", action="store_true",
+                        help="Gradio 공유 링크(https://xxxx.gradio.live)를 만들어 다른 사람도 접속하게 한다")
+    args = parser.parse_args()
     if not OPENAI_API_KEY:
         print("⚠️  OPENAI_API_KEY가 없거나 올바르지 않습니다. "
               ".env.example을 .env로 복사한 뒤 안내 문구를 지우고 실제 키를 입력하세요.")
     risk_model.load_model()   # 첫 실행 시 위험도 모델 학습 (몇 초)
+    if args.share:
+        # 접속자들이 저장 파일 하나를 함께 쓰면 서로의 게임을 덮어쓰게 되므로, 공유 중에는 저장을 끈다
+        savegame.ENABLED = False
+        print("🌐 공유 모드: 아래 'public URL' 주소를 전달하세요. 이 프로그램이 켜져 있는 동안만 접속됩니다.")
+        print("   공유 모드에서는 자동 저장/이어하기가 꺼지고, 접속자 모두가 이 컴퓨터의 OpenAI 키를 사용합니다.")
     demo, launch_kwargs = build_app()
-    demo.launch(**launch_kwargs)
+    demo.launch(share=args.share, **launch_kwargs)
