@@ -243,6 +243,110 @@ EVENTS = [
     E("neutral", "TV 뉴스에서 이 지역의 도로 통제 소식이 나온다.", places=SETTLED, indoor=True),
 ]
 
+# ---------- 긍정 이벤트 보강 ----------
+# 모두 물·식량·체온·휴식·길 찾기·돈·이동 중 하나에 실제로 도움이 되는 것들이다.
+EVENTS += [
+    # ===== 설원 =====
+    E("lucky", "얼음 위에 낚시꾼이 뚫어 놓은 구멍과 버려진 낚싯줄이 있다. 물고기를 잡을 수 있겠다.",
+      places=W, biomes=("snow",), time="day"),
+    E("lucky", "바람에 눈이 단단히 다져진 언덕이 있다. 눈굴을 파기에 좋다.", places=W, biomes=("snow",)),
+    E("lucky", "말라 죽은 관목이 눈 위로 삐죽 나와 있다. 불쏘시개로 쓸 수 있다.", places=W, biomes=("snow", "alpine")),
+    E("lucky", "멀리서 개 썰매 방울 소리가 들린다. 사람이 오가는 길이 가깝다.", places=W, biomes=("snow",), time="day"),
+    E("lucky", "흐린 하늘이 걷히자 해가 낮게 떠 남쪽 방향이 분명해졌다.", places=W, biomes=("snow", "alpine", "forest"),
+      time="day", weather=("clear",)),
+
+    # ===== 고산 =====
+    E("lucky", "바람이 닿지 않는 양지바른 바위 아래가 따뜻하다. 몸을 녹이며 쉴 수 있다.",
+      places=W, biomes=("alpine",), time="day"),
+    E("lucky", "능선 위에서 계곡 아래 마을의 지붕들이 내려다보인다.", places=W, biomes=("alpine",), time="day",
+      weather=("clear",)),
+    E("lucky", "누군가 바위에 붉은 페인트로 길 표시를 해 두었다. 하산로다.", places=W, biomes=("alpine",)),
+    E("lucky", "어둠 속 아래쪽 계곡에 마을 불빛이 몇 개 반짝인다. 방향을 잡을 수 있다.",
+      places=W, biomes=("alpine", "forest", "desert", "savanna"), time="night", weather=("clear",)),
+
+    # ===== 사막 =====
+    E("lucky", "새벽 냉기에 바위와 천 위에 이슬이 맺혔다. 천으로 훔쳐 짜면 마실 물이 된다.",
+      places=W, biomes=("desert", "savanna"), time="night"),
+    E("lucky", "모래에 반쯤 묻힌 플라스틱 물통을 찾았다. 안에 물이 조금 남아 있다.", places=W, biomes=("desert",)),
+    E("lucky", "선인장처럼 물을 머금은 다육식물 군락이 있다.", places=W, biomes=("desert",)),
+    E("lucky", "멀리 송전탑이 일렬로 서 있다. 따라가면 도로나 마을이 나온다.", places=W, biomes=("desert", "savanna", "snow")),
+    E("lucky", "모래 위에 덤불 그림자가 길게 드리워 방향을 읽을 수 있다.", places=W, biomes=("desert",), time="day"),
+    E("lucky", "해가 지자 열기가 가셔 걷기 좋은 시간이 되었다. 밤하늘 별이 길잡이가 된다.",
+      places=W, biomes=("desert",), time="night", weather=("clear",)),
+
+    # ===== 열대우림 =====
+    E("lucky", "커다란 잎이 우산처럼 겹친 곳 아래로 빗물이 줄줄 흘러내린다. 받아 마시기 좋다.",
+      places=W, biomes=("jungle",), weather=("rain", "storm")),
+    E("lucky", "코코넛이 달린 야자나무가 있다. 과즙과 과육을 얻을 수 있다.", places=W, biomes=("jungle", "savanna")),
+    E("lucky", "강가에 반쯤 물에 잠긴 통나무들이 있다. 엮으면 뗏목이 된다.", places=W, biomes=("jungle", "forest")),
+    E("lucky", "칼로 낸 표시가 나무줄기마다 이어져 있다. 원주민이나 채집꾼의 길이다.", places=W, biomes=("jungle",)),
+    E("lucky", "강물 소리가 들린다. 하류로 가면 사람 사는 곳이 나올 가능성이 크다.",
+      places=W, biomes=("jungle", "forest", "alpine")),
+
+    # ===== 사바나 =====
+    E("lucky", "개코원숭이 무리가 땅을 파헤치는 곳을 보니 얕게 고인 지하수가 있다.", places=W, biomes=("savanna",), time="day"),
+    E("lucky", "모닥불 흔적과 아직 따뜻한 재가 남아 있다. 사람이 막 떠난 자리다.", places=W, biomes=("savanna", "desert", "forest")),
+    E("lucky", "가시나무로 둥글게 울타리를 친 빈 가축우리가 있다. 맹수를 피해 밤을 보내기 좋다.",
+      places=W, biomes=("savanna",), time="night"),
+    E("lucky", "멀리 목동이 모는 소 떼의 방울 소리가 들린다. 아침이면 마을로 돌아갈 것이다.",
+      places=W, biomes=("savanna",), time="night"),
+    E("lucky", "마른 소똥이 넓게 흩어져 있다. 잘 타는 연료가 된다.", places=W, biomes=("savanna", "alpine", "desert")),
+
+    # ===== 숲 =====
+    E("lucky", "덫에 걸린 토끼가 있다. 누군가 놓아둔 올무다.", places=W, biomes=("forest", "snow")),
+    E("lucky", "자작나무 껍질이 잔뜩 벗겨져 있다. 젖어도 불이 잘 붙는 불쏘시개다.", places=W, biomes=("forest", "snow")),
+    E("lucky", "벌목꾼들이 쓰던 임시 천막이 비어 있다. 비를 피할 수 있다.", places=W, biomes=("forest", "jungle"),
+      weather=("rain", "storm")),
+    E("lucky", "쓰러진 나무 밑동이 바람을 막아 주는 아늑한 자리를 만들었다.", places=W, biomes=("forest",), time="night"),
+    E("lucky", "개울에 송어가 그림자처럼 머물러 있다. 손으로도 잡을 수 있을 것 같다.",
+      places=W, biomes=("forest", "alpine"), season=("봄", "여름", "가을")),
+
+    # ===== 야생 공통 =====
+    E("lucky", "밤새 내린 비로 바위 웅덩이마다 깨끗한 물이 찰랑거린다.", places=W, weather=("rain",), time="day"),
+    E("lucky", "멀리서 엔진 소리가 들린다. 차가 다니는 길이 가까이 있다.", places=W, time="day"),
+    E("lucky", "바람이 잦아들고 하늘이 맑게 갰다. 오늘은 멀리까지 걸을 수 있겠다.", places=W, weather=("clear",), temp="mild"),
+
+    # ===== 마을 (낮) =====
+    E("lucky", "마을 사람이 당신의 사정을 듣고 이웃 마을까지 가는 오토바이를 태워 주겠다고 한다.",
+      places=TOWN, time="day"),
+    E("lucky", "집집마다 돌아다니며 물을 나르는 아이들이 마을 공동 우물 위치를 알려 준다.", places=TOWN, time="day"),
+    E("lucky", "가지고 있는 물건을 먹을 것과 바꾸자는 상인이 있다.", places=TOWN),
+    E("lucky", "마을 진료소가 문을 열었다. 간단한 치료를 받을 수 있다.", places=TOWN, time="day"),
+    # ===== 마을 (밤) =====
+    E("lucky", "늦게까지 불이 켜진 집에서 노인이 손짓하며 들어와 몸을 녹이라고 한다.", places=TOWN, time="night"),
+    E("lucky", "마을 사원(교회·모스크)의 문이 열려 있다. 나그네가 하룻밤 머무는 것을 허락하는 곳이다.",
+      places=TOWN, time="night"),
+    E("lucky", "밤늦게 들어온 화물차 기사가 내일 새벽 큰 도시로 떠난다며 자리가 있다고 한다.",
+      places=TOWN, time="night"),
+    E("lucky", "모닥불가에 모인 마을 사람들이 남은 음식을 나눠 준다.", places=TOWN, time="night"),
+
+    # ===== 도시 =====
+    E("lucky", "광장에 무료 공공 충전대가 있다. 스마트폰을 충전하면 가족에게 연락할 수 있을지 모른다.",
+      places=CITY),
+    E("lucky", "광장 한쪽에서 관광객 안내소가 무료 지도와 대사관 위치를 알려 준다.", places=CITY, time="day"),
+    E("lucky", "식당 주인이 설거지를 도와주면 한 끼와 약간의 돈을 주겠다고 한다.", places=CITY),
+    E("lucky", "24시간 여는 기차역 대합실은 밤새 따뜻하고 경비가 있어 비교적 안전하다.", places=CITY, time="night"),
+    E("lucky", "야시장 상인이 문 닫기 전 남은 음식을 헐값에 판다.", places=CITY, time="night"),
+    E("lucky", "중고 물건 가게에서 쓸 만한 물건을 사 주겠다고 한다.", places=CITY, time="day"),
+
+    # ===== 야생의 실내 (오두막·동굴) =====
+    E("lucky", "난로 옆에 마른 장작이 한 아름 쌓여 있다.", places=W, indoor=True),
+    E("lucky", "구석에서 녹슬었지만 쓸 만한 냄비를 찾았다. 물을 끓일 수 있다.", places=W, indoor=True),
+    E("lucky", "지붕 홈통 아래 빗물받이 통에 물이 가득하다.", places=W, indoor=True, weather=("rain", "storm")),
+    E("lucky", "벽에 이전에 머문 사람이 남긴 메모가 있다. 가장 가까운 마을까지의 방향과 거리가 적혀 있다.",
+      places=W, indoor=True),
+    E("lucky", "바람과 눈을 완전히 막아 주는 깊고 마른 공간이다. 오랜만에 깊이 잘 수 있겠다.",
+      places=W, indoor=True, time="night"),
+    E("lucky", "선반 위 상자에 붕대와 소독약이 남아 있다.", places=W + TOWN, indoor=True),
+    # ===== 마을·도시의 실내 =====
+    E("lucky", "가게 주인이 휴대폰 충전을 해 주겠다고 한다.", places=SETTLED, indoor=True, time="day"),
+    E("lucky", "숙소 주인이 일을 도우면 숙박비를 받지 않겠다고 한다.", places=SETTLED, indoor=True),
+    E("lucky", "식당 TV에서 한국 대사관의 해외 조난자 지원 안내가 나온다. 연락처를 받아 적었다.",
+      places=SETTLED, indoor=True),
+    E("lucky", "옆자리 트럭 기사가 내일 아침 당신이 가려는 방향으로 간다고 말한다.", places=SETTLED, indoor=True),
+    E("lucky", "주인이 남은 수프를 데워 내준다.", places=SETTLED, indoor=True, time="night"),
+]
+
 # 위험 등급(0 안전, 1 주의, 2 위험)별 이벤트 발생 확률과 '위험 이벤트' 비중
 EVENT_CHANCE = {0: 0.20, 1: 0.40, 2: 0.60}
 DANGER_SHARE = {0: 0.25, 1: 0.50, 2: 0.75}

@@ -876,3 +876,19 @@ def test_clock_switches_to_local_time_zone(game):
     assert game.hour == 17 and game.is_night is False
     game.pass_time(3, "rest")
     assert game.hour == 20 and game.is_night
+
+
+
+def test_positive_events_everywhere():
+    """어떤 상황에서도 그 상황에 맞는 긍정 이벤트가 3개 이상 있어야 한다."""
+    for place in ("야생", "마을", "도시"):
+        for biome in ("snow", "alpine", "desert", "jungle", "savanna", "forest"):
+            for night in (False, True):
+                for indoor in (False, True):
+                    for weather in ("clear", "rain", "snow", "storm", "fog"):
+                        for temp in (-10, 15, 35):
+                            c = ctx(night=night, indoor=indoor, weather=weather, temp=temp)
+                            lucky = [e for e in events_module.candidates(place, biome, c) if e["kind"] == "lucky"]
+                            assert len(lucky) >= 3, (place, biome, c)
+    texts = [e["text"] for e in events_module.EVENTS]
+    assert len(texts) == len(set(texts))                             # 중복 이벤트 없음
