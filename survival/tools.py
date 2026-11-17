@@ -76,6 +76,7 @@ TOOLS = [
         "travel",
         "한국 방향으로 이동한다. 플레이어가 이번 턴에 이동을 지시했을 때만, 한 턴에 한 번만 호출한다. "
         "성공 여부, 요금, 도착지는 게임 엔진이 결정하므로 결과를 보고 서술한다. "
+        "'예약한_교통편'에 해당 교통편의 표가 있으면 요금 없이 그 표로 탑승하고 표는 사라진다. "
         "수단별 조건: walk(어디서나, 최대 30km), hitchhike(어디서나, 최대 250km, 실패할 수 있음), "
         "bus(마을/도시, 최대 600km), train(도시, 최대 1500km), ship(도시, 최대 3000km), "
         "flight(도시, 항상 한국까지 직항이며 distance_km 은 무시됨, 가장 비쌈). "
@@ -83,6 +84,17 @@ TOOLS = [
         {
             "method": {"type": "string", "enum": list(TRAVEL_RULES.keys()), "description": "이동 수단"},
             "distance_km": {"type": "number", "description": "이동할 거리(km)"},
+        },
+    ),
+    _function(
+        "buy_ticket",
+        "플레이어가 버스·기차·배·비행기의 표를 사거나 예약할 때 호출한다. 요금 계산과 결제, 표 지급은 게임 엔진이 "
+        "한다(update_status 로 돈을 빼거나 update_inventory 로 표를 넣지 않는다). 표는 '예약한_교통편'에 기록되어 "
+        "탈 때까지 유지된다. 이 툴은 표만 사는 것이며 이동하지 않는다. 플레이어가 표를 사면서 바로 타겠다고 하면 "
+        "buy_ticket 없이 travel 만 호출해도 된다.",
+        {
+            "method": {"type": "string", "enum": ["bus", "train", "ship", "flight"], "description": "교통편"},
+            "distance_km": {"type": "number", "description": "이동할 거리(km). flight 는 항상 한국까지이므로 무시된다"},
         },
     ),
     _function(
@@ -149,6 +161,8 @@ def execute_tool(state, name, arguments, client=None):
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
             result = {"error": "이번 턴의 시간은 이미 반영되었다. 추가로 시간을 흘리지 말고 결과를 서술하라."}
+        elif name == "buy_ticket":
+            result = state.buy_ticket(args.get("method"), args.get("distance_km", 1))
         elif name == "accept_offer":
             result = state.accept_offer()
         elif name == "set_scene":

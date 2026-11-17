@@ -26,8 +26,13 @@ IMPOSSIBLE = ("텔레포트", "순간이동", "마법", "타임머신", "워프"
               "제트팩", "광선", "무한", "소원", "투명", "부활", "치트")
 
 
+TICKET_WORDS = ("티켓", "항공권", "탑승권", "승차권", "승선권", "버스표", "기차표", "열차표", "배표", "비행기표")
+
+
 def item_problem(name):
     """소지품으로 넣을 수 없는 이름이면 그 이유를, 문제없으면 None을 반환한다."""
+    if any(word in name for word in TICKET_WORDS):
+        return "교통편 표는 buy_ticket 으로만 구매할 수 있음"
     if any(word in name for word in IMPOSSIBLE):
         return "현실에 존재하지 않는 물건"
     if any(word in name for word in NOT_CARRYABLE):
@@ -87,6 +92,7 @@ class GameState:
     climate: dict = field(default_factory=dict)          # 이 좌표의 기후 (climate.py)
     climate_at: list = field(default_factory=list)       # 기후를 조회한 좌표 [lat, lon]
     notices: list = field(default_factory=list)          # 이번 턴의 중요 알림 (대화창 표시용)
+    tickets: list = field(default_factory=list)          # 예약(결제)해 둔 교통편. 탈 때까지 계속 기억한다
     _snapshot: dict = field(default_factory=dict)
 
     # ---------- 시간 ----------
@@ -295,6 +301,39 @@ class GameState:
                 self.items.append(name)
         return rejected
 
+    def find_ticket_by_item(self, item):
+        return next((t for t in self.tickets if t["item"] == item), None)
+
+    def find_ticket(self, method):
+        return next((t for t in self.tickets if t["method"] == method), None)
+
+    def buy_ticket(self, method, km):
+        """교통편을 미리 예약(결제)한다. 표는 소지품과 예약 목록에 남고, 탈 때 자동으로 쓰인다."""
+        if method not in TRAVEL_RULES or TRAVEL_RULES[method]["per_km"] == 0:
+            return {"success": False, "message": "표를 살 수 있는 교통편은 버스, 기차, 배, 비행기뿐이다."}
+        rule = TRAVEL_RULES[method]
+        if self.place_type not in rule["places"]:
+            return {"success": False,
+                    "message": f"{rule['label']} 표는 {'/'.join(rule['places'])}에서만 살 수 있다. "
+                               f"현재 위치는 {self.place_type}."}
+        if self.find_ticket(method):
+            return {"success": False, "message": f"이미 {self.find_ticket(method)['item']}을(를) 가지고 있다."}
+        km = clamp(float(km), 1, min(rule["max_km"], self.distance))
+        if method == "flight":
+            km = self.distance
+        cost = self.fare(method, km)
+        if cost > self.money:
+            return {"success": False,
+                    "message": f"돈이 부족하다. {rule['label']} {km:.0f}km 요금 ${cost:.0f}, 보유 ${self.money:.0f}."}
+        self.money = round(self.money - cost, 2)
+        item = "한국행 항공권" if method == "flight" else f"{rule['label']} 티켓({km:.0f}km)"
+        self.tickets.append({"method": method, "km": round(km), "item": item, "price": cost})
+        self.items.append(item)
+        self.turn_flags["ticket"] = {"item": item, "price": cost}
+        return {"success": True, "cost": cost,
+                "message": f"{item}을(를) ${cost:.0f}에 구매했다. 아직 타지는 않았다. "
+                           f"플레이어가 탑승하겠다고 하면 travel(method='{method}') 을 호출하면 된다(추가 요금 없음)."}
+
     def fare(self, method, km):
         rule = TRAVEL_RULES[method]
         return round(rule["base"] + rule["per_km"] * km, 2)
@@ -304,14 +343,18 @@ class GameState:
         if method not in TRAVEL_RULES:
             return {"success": False, "message": f"알 수 없는 이동 수단: {method}"}
         rule = TRAVEL_RULES[method]
+        ticket = self.find_ticket(method)
         if self.place_type not in rule["places"]:
             return {"success": False,
                     "message": f"{rule['label']}은(는) {'/'.join(rule['places'])}에서만 이용할 수 있다. "
-                               f"현재 위치는 {self.place_type}."}
+                               f"현재 위치는 {self.place_type}."
+                               + (f" ({ticket['item']}은(는) 그대로 가지고 있다.)" if ticket else "")}
         km = clamp(float(km), 1, min(rule["max_km"], self.distance))
+        if ticket:
+            km = min(float(ticket["km"]), self.distance)   # 예약해 둔 구간만큼 간다
         if method == "flight":
             km = self.distance            # 비행기는 언제나 한국까지 직항이다 (중간 기착 없음)
-        cost = self.fare(method, km)
+        cost = 0.0 if ticket else self.fare(method, km)   # 이미 결제한 표가 있으면 요금을 다시 받지 않는다
         if cost > self.money:
             return {"success": False,
                     "message": f"돈이 부족하다. {rule['label']} {km:.0f}km 요금 ${cost:.0f}, 보유 ${self.money:.0f}."}
@@ -328,13 +371,18 @@ class GameState:
                                "도시에서 배나 비행기를 타거나, 더 짧은 거리를 이동해야 한다."}
 
         self.money = round(self.money - cost, 2)
+        if ticket:             # 표는 타는 순간 쓰고 없어진다
+            self.tickets.remove(ticket)
+            if ticket["item"] in self.items:
+                self.items.remove(ticket["item"])
         if method == "walk":   # 험한 지형에서는 걷는 속도가 느려진다
             speed = self.hazard["walk_speed"] if self.place_type == "야생" else rule["speed"]
             self.pass_time(km / speed, "walk")
         else:
             self.pass_time(km / rule["speed"], "ride", sheltered=True)
         arrived = self._relocate(new_lat, new_lon, km, method)
-        self.turn_flags["moved"] = {"how": rule["label"], "km": round(km), "cost": cost}
+        self.turn_flags["moved"] = {"how": rule["label"], "km": round(km), "cost": cost,
+                                    "ticket": ticket["item"] if ticket else None}
         if arrived:
             return {"success": True, "arrived_in_korea": True,
                     "message": f"{rule['label']}(으)로 {km:.0f}km 이동해 마침내 한국에 도착했다!"}
@@ -518,6 +566,7 @@ class GameState:
             "한국까지_km": round(self.distance),
             "위험등급": self.risk["label"],
             "환경위험": self.hazard["desc"] if self.place_type == "야생" else "없음 (사람 사는 곳)",
+            "예약한_교통편": [f"{t['item']} (결제 완료, 탑승 대기 중)" for t in self.tickets] or "없음",
             "현재장면": f"{'실내' if self.indoor else '야외'}" + (f" - {self.scene_place}" if self.scene_place else ""),
         }
 

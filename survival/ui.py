@@ -339,6 +339,9 @@ def render_hud(state):
             price = f'무료 · 최대 {rule["max_km"]}km'
         else:
             price = f'100km당 ${rule["per_km"] * 100:.0f} · 최대 {rule["max_km"]:,}km'
+        ticket = state.find_ticket(key)
+        if ticket:
+            price = f'🎫 예약됨 · {"한국까지" if key == "flight" else str(ticket["km"]) + "km"}'
         rows += f'<tr class="{"ok" if usable else "no"}"><td>{rule["label"]}</td><td>{price}</td></tr>'
     parts.append(f'<div class="card"><h4>TRANSPORT</h4><table class="fares">{rows}</table></div>')
 
