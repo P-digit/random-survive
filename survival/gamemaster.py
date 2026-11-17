@@ -75,7 +75,17 @@ INSTRUCTIONS = """
   장소·대상'이지 소지품이 아니므로 update_inventory 에 넣지 않는다.
 - 먹거나 마시거나 써서 없어지는 것은 쓰는 즉시 사라진다. update_status 의 consumed_items 에 반드시
   적는다. 받아 둔 빗물, 딴 열매, 주운 장작처럼 환경에서 얻은 것도 마찬가지다.
+- 입장권, 숙박권, 쿠폰, 열쇠 대여처럼 특정 행위를 위해 가진 물건은 그 행위를 마치면 사라진다
+  (update_inventory 의 remove). 교통편 표는 탑승하면 엔진이 자동으로 없앤다.
 - 플레이어가 가지고 있지 않은 물건은 쓸 수 없다.
+
+[교통편 예약 규칙]
+- 플레이어가 버스·기차·배·비행기 표를 사거나 예약하면 반드시 buy_ticket 을 호출한다. 서술만으로 표를
+  준 것처럼 쓰거나, update_status/update_inventory 로 처리하지 않는다.
+- [현재 상태]의 '예약한_교통편'은 플레이어가 이미 결제한 표다. 몇 턴이 지나도 유효하다. 플레이어가
+  그 교통편을 타겠다고 하면("한국행 비행기를 탄다", "예약한 버스에 오른다" 등) 다시 요금을 요구하거나
+  표가 없다고 하지 말고 곧바로 travel 을 호출한다. 요금은 엔진이 받지 않고, 표는 사라진다.
+- 출발 시각을 기다리게 하거나 탑승 수속을 여러 턴으로 늘리지 않는다. 탄다고 하면 그 턴에 도착까지 간다.
 - 돈은 일하기, 물건 팔기, 도움 받기 등으로 벌 수 있다. 야생에서는 돈을 벌 수 없다.
 - 쉬운 게임이 되지 않도록 공정하되 냉정하게 판정한다. 위험등급이 높을수록 나쁜 일이 잘 생긴다.
 - [현재 상태]의 '환경위험'은 그 지형이 플레이어를 죽이려 드는 방식이다. 극한 지형(설원, 사막,
@@ -95,9 +105,23 @@ INSTRUCTIONS = """
 ▶ 행동2
 ▶ 행동3
 - 추천 행동은 지금 상황에서 실제로 가능한 것만 적는다.
+- "한국 방향으로 걷는다", "한국을 향해 걸어간다" 같은 추천은 절대 하지 않는다. 한국은 수천 km 밖이라
+  걸어서 갈 수 없다. 걷기를 추천할 때는 "연기가 나는 쪽으로 걷는다", "강을 따라 하류로 내려간다"처럼
+  눈앞의 구체적인 목표(물, 마을, 도로, 피난처)를 향한 것만 적는다.
 """
 
-DEFAULT_SUGGESTIONS = ["주변을 살펴본다", "물과 식량을 찾는다", "한국 방향으로 걷는다"]
+DEFAULT_SUGGESTIONS = ["주변을 살펴본다", "물과 식량을 찾는다", "사람의 흔적을 찾는다"]
+
+
+def clean_suggestions(suggestions):
+    """'한국 방향으로 걷는다'처럼 수천 km를 걸어가겠다는 추천 행동은 다른 것으로 바꾼다."""
+    cleaned = []
+    for text in suggestions:
+        if re.search(r"한국.*(걷|걸어|도보)|(걷|걸어|도보).*한국", text):
+            text = next((d for d in DEFAULT_SUGGESTIONS if d not in suggestions and d not in cleaned),
+                        DEFAULT_SUGGESTIONS[-1])
+        cleaned.append(text)
+    return cleaned
 
 _client = None
 
@@ -160,9 +184,15 @@ def collect_notices(state):
         notices.append({"kind": "bad" if result["bad"] else "good",
                         "title": ("❌ 선택의 대가 — " if result["bad"] else "✅ 기회를 잡았다 — ") + result["title"],
                         "text": result["text"]})
+    bought = flags.get("ticket")
+    if bought and state.find_ticket_by_item(bought["item"]):
+        notices.append({"kind": "info", "title": f"🎫 예약 완료 — {bought['item']}",
+                        "text": f"${bought['price']:,.0f} 결제. 표는 탈 때까지 유지됩니다."})
     moved = flags.get("moved")
     if moved and state.status == "playing":
         cost = f" · 요금 ${moved['cost']:.0f}" if moved["cost"] else ""
+        if moved.get("ticket"):
+            cost = f" · {moved['ticket']} 사용"
         notices.append({"kind": "info", "title": f"📍 이동 — {moved['how']} {moved['km']:,}km{cost}",
                         "text": f"{state.place_name} ({state.place_type} · {state.biome_name}) 도착. "
                                 f"한국까지 {state.distance:,.0f}km"})
@@ -302,7 +332,7 @@ def run_turn(state, player_text=None):
     if not body:
         body = "(잠시 정신이 아득해진다. 다시 행동을 정해 보자.)"
     if state.status == "playing":
-        state.suggestions = suggestions if len(suggestions) == 3 else list(DEFAULT_SUGGESTIONS)
+        state.suggestions = clean_suggestions(suggestions) if len(suggestions) == 3 else list(DEFAULT_SUGGESTIONS)
         if state.offer:      # 기회가 살아 있으면 첫 번째 버튼은 항상 '받아들이기'
             state.suggestions[0] = state.offer["accept"]
     else:

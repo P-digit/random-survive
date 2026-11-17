@@ -597,3 +597,60 @@ def test_placeholder_or_broken_api_key_is_rejected():
     assert read_api_key("sk-여기에-키를-입력") is None      # 한글 안내 문구 → ascii 인코딩 오류의 원인
     assert read_api_key("sk-your-key-here") is None and read_api_key("") is None and read_api_key(None) is None
     assert read_api_key('  "sk-proj-abc123_DEF"  ') == "sk-proj-abc123_DEF"
+
+
+# ---------- 6차 수정: 교통편 예약 / 추천 행동 ----------
+def test_ticket_is_remembered_and_used_on_boarding(game):
+    game.begin_turn()
+    game.place_type, game.money = "도시", 2000
+    price = game.fare("flight", game.distance)
+    out = call(game, "buy_ticket", method="flight", distance_km=1)
+    assert out["success"] and game.money == pytest.approx(2000 - price)
+    assert "한국행 항공권" in game.items and game.find_ticket("flight")
+    assert "error" not in out and "한국행 항공권" in str(out["현재상태"]["예약한_교통편"])
+    assert call(game, "buy_ticket", method="flight", distance_km=1)["success"] is False   # 중복 구매 불가
+    assert any(n["title"].startswith("🎫") for n in gamemaster.collect_notices(game))
+
+    for _ in range(3):                      # 여러 턴이 지나고, 돈을 다 써도 표는 남아 있다
+        game.begin_turn()
+        game.end_turn(0.5)
+    game.money = 0
+    game.begin_turn()
+    assert "한국행 항공권" in gamemaster.build_input(game, "한국행 비행기를 탄다")
+    out = call(game, "travel", method="flight", distance_km=1)
+    assert out["success"] and out["arrived_in_korea"] and game.status == "won"
+    assert game.tickets == [] and "한국행 항공권" not in game.items and game.money == 0
+
+
+def test_bus_ticket_consumed_and_survives_save(game, monkeypatch, tmp_path):
+    monkeypatch.setattr(savegame, "SAVE_DIR", tmp_path)
+    monkeypatch.setattr(savegame, "SAVE_PATH", tmp_path / "autosave.json")
+    game.begin_turn()
+    game.place_type, game.money = "마을", 100
+    assert call(game, "buy_ticket", method="bus", distance_km=300)["success"]
+    money_after_buying = game.money
+    assert "버스 티켓(300km)" in game.items
+    savegame.save(game)
+    loaded = savegame.load()                # 저장했다 불러와도 예약이 남아 있다
+    assert loaded.find_ticket("bus")["km"] == 300
+
+    before = game.distance
+    out = call(game, "travel", method="bus", distance_km=50)    # 표의 구간(300km)만큼 간다
+    assert out["success"] and before - game.distance == pytest.approx(300, abs=3)
+    assert game.money == money_after_buying and not any("티켓" in i for i in game.items)
+    assert "사용" in gamemaster.collect_notices(game)[0]["title"]
+
+
+def test_tickets_cannot_be_conjured_as_items(game):
+    game.begin_turn()
+    out = call(game, "update_inventory", remove=[], add=[{"name": "한국행 비행기 티켓", "carryable": True}])
+    assert out["거부된_물건"] and not any("티켓" in i for i in game.items)
+    assert call(game, "buy_ticket", method="flight", distance_km=1)["success"] is False   # 야생에서는 못 산다
+    assert call(game, "buy_ticket", method="walk", distance_km=1)["success"] is False
+
+
+def test_no_walk_to_korea_suggestion():
+    cleaned = gamemaster.clean_suggestions(["한국 방향으로 걷는다", "물을 찾는다", "불을 피운다"])
+    assert not any("한국" in s for s in cleaned) and len(cleaned) == 3 and len(set(cleaned)) == 3
+    assert gamemaster.clean_suggestions(["한국행 비행기를 탄다", "a", "b"])[0] == "한국행 비행기를 탄다"
+    assert not any("한국" in s for s in gamemaster.DEFAULT_SUGGESTIONS)

@@ -85,6 +85,7 @@ fastmcp list mcp_server.py       # MCP 서버의 툴 목록 확인
 | 턴 | 한 턴에 행동 하나. 이동과 시간 경과는 한 턴에 한 번만 반영됩니다 |
 | 소지품 | 들고 다닐 수 있는 물건만 들어갑니다(오두막·오아시스·차량 등은 거부). 먹거나 마신 것은 사라지고, `에너지바 2개`는 하나씩 줄어듭니다 |
 | 기회 | 매 턴 10% 확률, 8턴 동안 없으면 반드시 발생. 나온 다음 턴까지 받아들이지 않으면 사라집니다. 현재 장면에 맞는 것만 나오고(실내에서는 지나가는 차량 등이 나오지 않음), 받아들이면 15~30% 확률로 나쁜 결과가 됩니다 |
+| 예약 | 버스·기차·배·비행기 표는 미리 사 둘 수 있습니다. 표는 저장되어 탈 때까지 유지되고, 타면 요금 없이 탑승한 뒤 소지품에서 사라집니다 |
 | 이동 | 이동은 한 턴에 도착까지 끝납니다. 탈것 안에서의 턴은 없습니다. 비행기는 한국 직항뿐입니다 |
 | 저장 | 매 턴 자동 저장. 사망하거나 귀환하면 저장 파일이 지워집니다. "새로 낙하"를 누르면 이전 저장을 덮어씁니다 |
 
@@ -122,7 +123,7 @@ fastmcp list mcp_server.py       # MCP 서버의 툴 목록 확인
    │
    ▼
 [LLM] 현재 상태 + 이벤트 + 플레이어 행동을 받아 툴 호출을 요청
-   │      advance_time / update_status / update_inventory / travel / set_scene
+   │      advance_time / update_status / update_inventory / travel / buy_ticket / set_scene
    │      accept_offer / reject_event / search_survival_guide
    ▼
 [엔진] 툴 실행 (규칙 검증, 수치 범위 제한, Open-Meteo 재조회, RAG 검색)
