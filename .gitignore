@@ -1,0 +1,23 @@
+# 비밀 키
+.env
+
+# 실행 중 생성되는 파일
+models/
+outputs/
+chroma_db/
+saves/
+.gradio/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

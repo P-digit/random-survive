@@ -1,0 +1,4 @@
+# 선택 패키지 - 없어도 게임은 실행됩니다
+chromadb   # RAG를 ChromaDB로 (없으면 numpy 코사인 유사도 검색으로 동작)
+fastmcp    # mcp_server.py 실행용
+pytest     # 테스트 실행용
