@@ -76,8 +76,14 @@ INSTRUCTIONS = """
 - 성공이 보장되지 않는 행동은 반드시 attempt_action 으로 판정한다. GM이 결과를 미리 정하지 않는다.
   성공하면 그 결과를 실제로 준다(차량은 acquire_vehicle, 돈·물건은 update_status/update_inventory).
   실패하면 목표를 이루지 못하고, 상대는 현실적으로 반응한다(반격, 비명, 신고, 도주).
-- 행동에는 대가가 따른다. 불법 행동은 수배도를 올리고, 수배 중이면 마을·도시에서 경찰이 다가오고
-  공항·항구에서 붙잡힐 수 있다. 경찰에게 붙잡히는 상황이면 arrest 를 호출한다. 도망치거나 맞서는 것도
+- 행동에는 대가가 따른다. 수배도는 '현실에서 범죄인 행동'(폭행, 절도, 강도, 차량 절도, 주거·건물 침입,
+  사기, 협박, 밀입국·밀항, 무임승차)을 '누군가 목격했을 때'만 오른다. attempt_action 의 crime 과
+  witnessed 를 정직하게 정한다.
+  * 범죄가 아닌 것: 동물과 싸우기, 정당방위, 야생에서 채집·사냥, 버려진 빈집에서 비 피하기, 흥정, 위험한 행동.
+  * 목격자: 아무도 없는 곳·잠든 사이·들키지 않은 범죄는 none. 피해자가 얼굴을 보았다면 victim.
+    시장·역·도로처럼 사람이 많은 곳, 경비·CCTV가 있는 곳이면 bystanders.
+  * 목격자가 없으면 수배되지 않는다. 그런 범죄를 서술로 '신고당했다'고 만들지 않는다.
+  수배 중이면 마을·도시에서 경찰이 다가오고 공항·항구에서 붙잡힐 수 있다. 경찰에게 붙잡히는 상황이면 arrest 를 호출한다. 도망치거나 맞서는 것도
   attempt_action 으로 판정한다.
 - [기회]로 나타난 트럭 기사·선장 등도 장면 속 인물이므로, 플레이어가 제안을 받는 대신 그들을 상대로 다른 행동
   (제압, 탈취, 흥정)을 할 수 있다.
@@ -93,6 +99,11 @@ INSTRUCTIONS = """
 - 입장권, 숙박권, 쿠폰, 열쇠 대여처럼 특정 행위를 위해 가진 물건은 그 행위를 마치면 사라진다
   (update_inventory 의 remove). 교통편 표는 탑승하면 엔진이 자동으로 없앤다.
 - 플레이어가 가지고 있지 않은 물건은 쓸 수 없다.
+
+[돈 규칙]
+- 돈을 쓰는 모든 순간(구매, 숙박, 식사, 뇌물, 택시·나룻배 삯, 수수료)에 pay 를 호출한다. 서술로만 "돈을
+  건넸다"고 쓰고 툴을 부르지 않으면 안 된다. 값은 그 지역 물가에 맞게 정하고, 서술에 적은 금액과 같게 한다.
+- pay 가 실패하면(돈 부족) 사지 못한 것이다. 외상이나 공짜로 바꿔 주지 않는다.
 
 [교통편 예약 규칙]
 - 플레이어가 버스·기차·배·비행기 표를 사거나 예약하면 반드시 buy_ticket 을 호출한다. 서술만으로 표를
@@ -184,6 +195,24 @@ def build_input(state, player_text, recap=None):
                   "(위 행동 하나만 판정한다. 이것은 시도일 뿐이며, 물건·인물의 존재와 성공 여부는 "
                   "현실성에 따라 GM이 정한다. 결과를 서술한 뒤 멈추고 다음 지시를 기다린다.)"]
     return "\n".join(parts)
+
+
+PAYMENT = re.compile(r"\$\s?(\d+(?:\.\d+)?)[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)"
+                     r"|(\d+(?:\.\d+)?)\s?달러[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)")
+
+
+def auto_charge(state, narration):
+    """게임 마스터가 '돈을 냈다'고 서술했는데 이번 턴에 돈이 전혀 줄지 않았다면, 서술된 금액만큼 차감한다."""
+    if state.money < state._snapshot.get("money", state.money) or state.turn_flags.get("paid"):
+        return 0.0
+    match = PAYMENT.search(narration or "")
+    if not match:
+        return 0.0
+    amount = min(float(match.group(1) or match.group(3)), state.money)
+    if amount > 0:
+        state.money = round(state.money - amount, 2)
+        state.turn_flags["paid"] = amount
+    return amount
 
 
 def collect_notices(state):
@@ -352,6 +381,7 @@ def run_turn(state, player_text=None):
 
     state.prev_response_id = response.id
     auto_consume(state, player_text)
+    auto_charge(state, response.output_text)
     if player_text is None:
         state.end_turn(default_hours=0)            # 시작 턴은 시간이 흐르지 않는다
     else:
