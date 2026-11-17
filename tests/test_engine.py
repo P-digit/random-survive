@@ -238,8 +238,8 @@ from survival import imagegen, savegame  # noqa: E402
 from survival.events import roll_major_event  # noqa: E402
 
 
-def call(game, name, **args):
-    return json.loads(execute_tool(game, name, json.dumps(args)))
+def call(game, tool_name, **args):
+    return json.loads(execute_tool(game, tool_name, json.dumps(args)))
 
 
 def test_inventory_rejects_places_and_impossible_items(game):
@@ -667,3 +667,90 @@ def test_saving_can_be_disabled_for_share_mode(game, monkeypatch, tmp_path):
     savegame.save(game)                                  # 저장하지도, 기존 파일을 건드리지도 않는다
     monkeypatch.setattr(savegame, "ENABLED", True)
     assert savegame.load().health == 100
+
+
+
+# ---------- 7차 수정: 자유 행동 (시도 판정, 탈것, 수배도) ----------
+def fix_roll(monkeypatch, value):
+    monkeypatch.setattr(state_module.random, "random", lambda: value)
+
+
+def test_hijack_truck_then_drive(game, monkeypatch):
+    game.begin_turn()
+    game.offer = {"id": "trucker", "text": "트럭", "accept": "", "detail": "", "turn": game.turn}
+    assert call(game, "acquire_vehicle", kind="truck", name="화물 트럭")["success"] is False   # 시도 없이 못 얻는다
+
+    fix_roll(monkeypatch, 0.0)                                       # 주사위: 성공
+    out = call(game, "attempt_action", action="트럭 기사를 기절시킨다", difficulty="hard",
+               illegal=True, violent=True, item="다용도 칼", stealth=False)
+    assert out["success"] and out["chance"] == "50%" and game.wanted == 20   # hard 35% + 칼 15%
+    assert "error" in call(game, "attempt_action", action="또", difficulty="easy", illegal=False,
+                           violent=False, item="", stealth=False)    # 한 턴에 한 번
+    got = call(game, "acquire_vehicle", kind="truck", name="화물 트럭")
+    assert got["success"] and game.vehicle["stolen"] and game.offer is None
+    titles = [n["title"] for n in gamemaster.collect_notices(game)]
+    assert any(t.startswith("🎲") and "성공" in t for t in titles) and any(t.startswith("🚙") for t in titles)
+
+    game.begin_turn()                                                # 야생에서도 운전해서 갈 수 있다
+    fuel, before = game.vehicle["range_km"], game.distance
+    out = call(game, "travel", method="drive", distance_km=200)
+    assert out["success"] and before - game.distance == pytest.approx(200, abs=3)
+    assert game.vehicle["range_km"] == fuel - 200 and game.money == 50
+
+
+def test_failed_attack_hurts_and_raises_wanted(game, monkeypatch):
+    game.begin_turn()
+    fix_roll(monkeypatch, 0.99)                                      # 주사위: 실패
+    out = call(game, "attempt_action", action="기사를 제압한다", difficulty="very_hard",
+               illegal=True, violent=True, item="", stealth=False)
+    assert out["success"] is False and game.health == 70 and game.wanted == 35
+    assert call(game, "acquire_vehicle", kind="truck", name="")["success"] is False
+
+
+def test_chance_modifiers():
+    weak = GameState(lat=0, lon=0, place_name="x", weather=fake_weather(), biome="forest",
+                     health=30, energy=10, start_hour=23)
+    weak.begin_turn = lambda: None
+    weak.turn_flags = {}
+    random.seed(0)
+    out = weak.attempt("창고에 몰래 들어간다", "normal", illegal=True, violent=False, item="", stealth=True)
+    assert out["chance"] == "40%"                                     # 60 - 15 - 15 + 10(밤)
+
+
+def test_drive_runs_out_of_fuel_and_blocks_at_sea(game, monkeypatch):
+    game.begin_turn()
+    game.vehicle = {"kind": "car", "name": "낡은 승용차", "speed": 70, "range_km": 100, "sea": False, "stolen": False}
+    out = call(game, "travel", method="drive", distance_km=500)
+    assert out["success"] and game.vehicle is None and "연료" in out["message"]
+
+    game.begin_turn()
+    game.vehicle = {"kind": "car", "name": "차", "speed": 70, "range_km": 300, "sea": False, "stolen": False}
+    monkeypatch.setattr(geo, "is_land", lambda lat, lon: False)
+    assert call(game, "travel", method="drive", distance_km=100)["success"] is False
+    game.vehicle["kind"], game.vehicle["sea"] = "boat", True           # 보트는 바다를 건넌다
+    assert call(game, "travel", method="drive", distance_km=100)["success"]
+
+
+def test_wanted_consequences(game, monkeypatch):
+    game.begin_turn()
+    game.place_type, game.money, game.wanted = "도시", 3000, 80
+    game.vehicle = {"kind": "car", "name": "훔친 차", "speed": 70, "range_km": 300, "sea": False, "stolen": True}
+    assert call(game, "buy_ticket", method="flight", distance_km=1)["success"]
+    fix_roll(monkeypatch, 0.1)                                       # 0.1 < 0.8 → 공항에서 붙잡힘
+    hours = game.elapsed_hours
+    out = call(game, "travel", method="flight", distance_km=1)
+    assert out["arrested"] and game.status == "playing"
+    assert game.vehicle is None and game.tickets == [] and not any("항공권" in i for i in game.items)
+    assert game.elapsed_hours - hours == 24 and game.wanted < 40 and game.money < 2000
+
+    game.wanted = 60                                                 # 수배 중이면 도시에서 경찰 이벤트
+    game.offer, game.last_major_turn = None, game.turn + 100
+    fix_roll(monkeypatch, 0.0)
+    game.begin_turn()
+    assert game.event and "경찰" in game.event["text"]
+
+    game.wanted = 30
+    game.pass_time(5, "rest")
+    assert game.wanted == pytest.approx(28.5)                        # 시간이 지나면 내려간다
+    game.wanted = 0
+    assert call(game, "arrest", reason="검문")["success"] is False    # 수배가 없으면 체포도 없다

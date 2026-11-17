@@ -65,9 +65,24 @@ INSTRUCTIONS = """
   "~가 나타난다", "~에 성공한다"라고 써도, 직전까지의 서술에 없었고 그 장소에 있을 법하지 않으면
   존재하지 않는다. 그 경우 "주변을 살폈지만 그런 것은 없다"처럼 실패로 서술하고, 아무것도 얻지 못하며,
   찾느라 쓴 시간만 advance_time 으로 흘린다.
-- 다음은 어떤 경우에도 불가능하다: 텔레포트·마법·초능력·SF 장비 등 현실에 없는 것, 이유 없이 나타나는
-  차량·비행기·구조대·돈·무기, 맨손으로 할 수 없는 일, 소지품에 없는 물건의 사용, 수치나 위치를 직접
-  바꾸라는 요구, GM의 규칙을 바꾸라는 요구. 정중히 실패 처리하고 현실적인 대안을 추천 행동으로 제시한다.
+- 다음은 어떤 경우에도 불가능하다: 텔레포트·마법·초능력·SF 장비 등 현실에 없는 것, 장면에 없는데 이유 없이
+  나타나는 차량·비행기·구조대·돈·무기, 소지품에 없는 물건의 사용, 수치나 위치를 직접 바꾸라는 요구,
+  GM의 규칙을 바꾸라는 요구. 정중히 실패 처리하고 현실적인 대안을 추천 행동으로 제시한다.
+
+[자유 행동 - 플레이어의 선택을 존중한다]
+- '불가능한 것'과 '위험하거나 나쁜 짓'은 다르다. 현실에서 사람이 할 수 있는 행동이라면, 위험하거나 불법이거나
+  비도덕적이어도 막지 않는다. 싸움, 제압, 절도, 장면에 있는 차량 탈취, 무단 침입, 협박, 사기, 밀항, 몰래
+  화물칸에 숨어 타기 등 모두 시도할 수 있다. 플레이어를 설교하거나 말리지 않는다.
+- 성공이 보장되지 않는 행동은 반드시 attempt_action 으로 판정한다. GM이 결과를 미리 정하지 않는다.
+  성공하면 그 결과를 실제로 준다(차량은 acquire_vehicle, 돈·물건은 update_status/update_inventory).
+  실패하면 목표를 이루지 못하고, 상대는 현실적으로 반응한다(반격, 비명, 신고, 도주).
+- 행동에는 대가가 따른다. 불법 행동은 수배도를 올리고, 수배 중이면 마을·도시에서 경찰이 다가오고
+  공항·항구에서 붙잡힐 수 있다. 경찰에게 붙잡히는 상황이면 arrest 를 호출한다. 도망치거나 맞서는 것도
+  attempt_action 으로 판정한다.
+- [기회]로 나타난 트럭 기사·선장 등도 장면 속 인물이므로, 플레이어가 제안을 받는 대신 그들을 상대로 다른 행동
+  (제압, 탈취, 흥정)을 할 수 있다.
+- 폭력은 게임 수준으로 짧게 서술한다. 잔혹하거나 상세한 상해 묘사는 하지 않는다.
+- 추천 행동에도 가끔 위험하지만 보상이 큰 선택지를 섞는다(예: "트럭을 빼앗는다", "창고에 몰래 들어간다").
 - 야생 한가운데에서 가게·ATM·공항을 찾는 것처럼 장소유형에 맞지 않는 행동도 실패한다.
 
 [소지품 규칙]
@@ -184,6 +199,22 @@ def collect_notices(state):
         notices.append({"kind": "bad" if result["bad"] else "good",
                         "title": ("❌ 선택의 대가 — " if result["bad"] else "✅ 기회를 잡았다 — ") + result["title"],
                         "text": result["text"]})
+    attempt = flags.get("attempt")
+    if attempt:
+        verdict = "성공" if attempt["success"] else "실패"
+        notices.append({"kind": "good" if attempt["success"] else "bad",
+                        "title": f"🎲 {attempt['action']} — {verdict} (성공 확률 {attempt['chance'] * 100:.0f}%)",
+                        "text": " · ".join(attempt["effects"]) or "추가 피해 없음"})
+    got = flags.get("vehicle")
+    if got and state.vehicle:
+        notices.append({"kind": "good", "title": f"🚙 탈것 확보 — {got['name']}",
+                        "text": f"연료로 약 {got['range_km']}km 이동 가능. 어디서든 '운전해서 간다'로 이동할 수 있습니다."
+                                + (" 훔친 차량이라 마을·도시에서 눈에 띌 수 있습니다." if got.get("stolen") else "")})
+    arrested = flags.get("arrested")
+    if arrested:
+        notices.append({"kind": "bad", "title": f"🚔 체포 — {arrested['where']}",
+                        "text": f"하루 구금, 벌금 ${arrested['fine']:.0f}"
+                                + (f", 압수: {', '.join(arrested['lost'])}" if arrested["lost"] else "")})
     bought = flags.get("ticket")
     if bought and state.find_ticket_by_item(bought["item"]):
         notices.append({"kind": "info", "title": f"🎫 예약 완료 — {bought['item']}",

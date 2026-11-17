@@ -79,12 +79,48 @@ TOOLS = [
         "'예약한_교통편'에 해당 교통편의 표가 있으면 요금 없이 그 표로 탑승하고 표는 사라진다. "
         "수단별 조건: walk(어디서나, 최대 30km), hitchhike(어디서나, 최대 250km, 실패할 수 있음), "
         "bus(마을/도시, 최대 600km), train(도시, 최대 1500km), ship(도시, 최대 3000km), "
+        "drive(보유한 탈것이 있을 때 어디서나, 요금 없음, 남은 연료만큼), "
         "flight(도시, 항상 한국까지 직항이며 distance_km 은 무시됨, 가장 비쌈). "
         "이동은 호출 즉시 도착까지 끝난다. 이동 중인 장면에서 멈추지 말고 도착한 곳의 상황으로 서술을 끝낸다.",
         {
-            "method": {"type": "string", "enum": list(TRAVEL_RULES.keys()), "description": "이동 수단"},
+            "method": {"type": "string", "enum": list(TRAVEL_RULES.keys()) + ["drive"],
+                       "description": "이동 수단. drive 는 플레이어가 손에 넣은 탈것('보유_탈것')을 직접 모는 것"},
             "distance_km": {"type": "number", "description": "이동할 거리(km)"},
         },
+    ),
+    _function(
+        "attempt_action",
+        "결과가 불확실한 행동을 판정한다. 싸움, 제압, 절도, 차량 탈취, 무단 침입, 협박, 사기, 몰래 숨어 타기, "
+        "위험한 등반·도하, 설득하기 어려운 흥정 등 성공이 보장되지 않는 행동은 반드시 이 툴로 판정한다. "
+        "성공 확률은 엔진이 계산하고 주사위도 엔진이 굴린다. GM은 결과를 미리 정하지 말고 돌려받은 success 대로 서술한다. "
+        "한 턴에 한 번만 호출한다.",
+        {
+            "action": {"type": "string", "description": "시도하는 행동을 짧게. 예: '트럭 기사를 기절시킨다'"},
+            "difficulty": {"type": "string", "enum": ["easy", "normal", "hard", "very_hard"],
+                           "description": "상황에 따른 난이도. 상대가 경계 중이거나, 무장했거나, 여럿이거나, 플레이어가 "
+                                          "맨손이면 어렵게 매긴다. 예: 방심한 사람의 물건 슬쩍하기 normal, "
+                                          "깨어 있는 트럭 기사를 맨손으로 제압 hard, 무장 경비원 제압 very_hard"},
+            "illegal": {"type": "boolean", "description": "법에 어긋나는 행동이면 true (수배도가 오른다)"},
+            "violent": {"type": "boolean", "description": "몸싸움·폭력이 따르는 행동이면 true (실패하면 다친다)"},
+            "item": {"type": "string", "description": "이 시도에 쓰는 소지품 이름(다용도 칼 등). 없으면 빈 문자열"},
+            "stealth": {"type": "boolean", "description": "몰래 하는 행동이면 true (밤이면 유리하다)"},
+        },
+    ),
+    _function(
+        "acquire_vehicle",
+        "플레이어가 탈것(차·트럭·오토바이·보트)을 손에 넣었을 때 호출한다. 같은 턴에 attempt_action 이 성공했어야 한다 "
+        "(탈취, 훔치기, 흥정해서 사기 등). 이후 플레이어는 travel(method='drive') 로 직접 몰고 이동할 수 있다. "
+        "장면에 실제로 있던 탈것만 얻을 수 있다.",
+        {
+            "kind": {"type": "string", "enum": ["car", "truck", "motorbike", "boat"], "description": "탈것 종류"},
+            "name": {"type": "string", "description": "짧은 한국어 이름. 예: '낡은 화물 트럭'"},
+        },
+    ),
+    _function(
+        "arrest",
+        "수배 중인 플레이어가 경찰·군인·경비에게 붙잡혔을 때 호출한다(검문에서 걸림, 도주 실패 등). "
+        "엔진이 구금 하루, 벌금, 탈것·표 압수를 적용한다. 수배도가 0이면 쓸 수 없다.",
+        {"reason": {"type": "string", "description": "붙잡힌 상황. 예: '마을 검문소'"}},
     ),
     _function(
         "buy_ticket",
@@ -161,6 +197,14 @@ def execute_tool(state, name, arguments, client=None):
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
             result = {"error": "이번 턴의 시간은 이미 반영되었다. 추가로 시간을 흘리지 말고 결과를 서술하라."}
+        elif name == "attempt_action":
+            result = state.attempt(args.get("action", ""), args.get("difficulty", "normal"),
+                                   bool(args.get("illegal")), bool(args.get("violent")),
+                                   str(args.get("item", "")), bool(args.get("stealth")))
+        elif name == "acquire_vehicle":
+            result = state.acquire_vehicle(args.get("kind"), args.get("name", ""))
+        elif name == "arrest":
+            result = state.arrest(str(args.get("reason", "")))
         elif name == "buy_ticket":
             result = state.buy_ticket(args.get("method"), args.get("distance_km", 1))
         elif name == "accept_offer":
