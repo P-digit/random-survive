@@ -590,3 +590,10 @@ def test_notices_for_important_events(game):
     game.status = "dead"
     game.death_reason = "과다 출혈"
     assert [n["kind"] for n in gamemaster.collect_notices(game)] == ["bad", "bad"]
+
+
+def test_placeholder_or_broken_api_key_is_rejected():
+    from survival.config import read_api_key
+    assert read_api_key("sk-여기에-키를-입력") is None      # 한글 안내 문구 → ascii 인코딩 오류의 원인
+    assert read_api_key("sk-your-key-here") is None and read_api_key("") is None and read_api_key(None) is None
+    assert read_api_key('  "sk-proj-abc123_DEF"  ') == "sk-proj-abc123_DEF"

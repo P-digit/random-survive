@@ -14,7 +14,19 @@ CHROMA_DIR = BASE_DIR / "chroma_db"  # RAG용 벡터 DB 저장 위치
 SAVE_DIR = BASE_DIR / "saves"        # 자동 저장 파일 위치
 
 # --- OpenAI 모델 (교재에서 사용한 저비용 모델) ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+def read_api_key(raw):
+    """환경변수에서 읽은 키를 검사한다. 쓸 수 없는 값이면 None을 돌려준다.
+
+    키에 한글 등 ASCII가 아닌 글자가 있으면(.env.example의 안내 문구를 그대로 둔 경우 등)
+    HTTP 헤더로 보낼 수 없어 "'ascii' codec can't encode characters" 오류가 난다.
+    """
+    key = (raw or "").strip().strip('"').strip("'")
+    if not key or not key.isascii() or " " in key or "your-key" in key:
+        return None
+    return key
+
+
+OPENAI_API_KEY = read_api_key(os.getenv("OPENAI_API_KEY"))
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1-mini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
