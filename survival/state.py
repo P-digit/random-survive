@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from . import climate as climate_api
 from . import geo
 from .config import (ARRIVAL_RADIUS_KM, LAND_METHODS, MAJOR_EVENT_CHANCE,
-                     MAJOR_EVENT_PITY_TURNS, START_ITEMS, START_MONEY, TRAVEL_RULES)
+                     MAJOR_EVENT_PITY_TURNS, START_ITEMS, START_MONEY, TRAVEL_RULES,
+                     VITALS_DRAIN)
 from .events import (BIOME_HAZARDS, BIOMES, classify_biome, roll_event,
                      roll_major_event)
 from .risk_model import predict_risk
@@ -178,8 +179,8 @@ class GameState:
             resting = activity in ("rest", "sleep", "ride")
 
             # --- 소모 ---
-            hunger = (1.2 if activity == "sleep" else 2.2) * hz["satiety"]
-            thirst = 1.5 if activity == "sleep" else 3.0
+            hunger = (1.2 if activity == "sleep" else 2.2) * hz["satiety"] * VITALS_DRAIN
+            thirst = (1.5 if activity == "sleep" else 3.0) * VITALS_DRAIN
             if self.biome == "desert" and wild:
                 thirst *= hz["hydration"] if not self.is_night else 1.2   # 사막의 낮
             else:
@@ -189,7 +190,7 @@ class GameState:
             energy_rate = {"sleep": 10, "rest": 6, "ride": 1.5, "walk": -5,
                            "work": -5, "forage": -4, "explore": -4}.get(activity, -3)
             if energy_rate < 0:
-                energy_rate *= hz["energy"]
+                energy_rate *= hz["energy"] * VITALS_DRAIN
             elif wild and not sheltered and (temp <= 5 or temp >= 35):
                 energy_rate *= 0.5        # 혹독한 날씨에 노출된 채로는 제대로 쉬지 못한다
             self.satiety = clamp(self.satiety - hunger * h)
