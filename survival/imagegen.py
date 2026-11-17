@@ -1,0 +1,119 @@
+"""현재 장면 이미지 생성 (멀티모달 파트, Images API)."""
+import base64
+import time
+
+from .config import IMAGE_MODEL, LLM_MODEL, OUTPUT_DIR
+from .events import BIOMES
+from .weather import weather_category
+
+# 날씨 분류별로 그림에 반드시 보여야 하는 요소
+WEATHER_VISUALS = {
+    "rain":  "It is raining: clearly visible streaks of falling rain across the whole frame, "
+             "dark grey rain clouds, wet glistening ground with puddles and splashes.",
+    "storm": "A violent thunderstorm: towering black storm clouds, a bright lightning bolt in the sky, "
+             "heavy sheets of rain blown sideways by the wind, drenched ground.",
+    "snow":  "It is snowing: many visible snowflakes falling across the whole frame, "
+             "ground and objects covered in fresh white snow, pale overcast sky.",
+    "fog":   "Thick fog: distant scenery fades into grey mist, low visibility, damp air.",
+    "clear": "",
+}
+
+PLACE_EN = {"야생": "untouched wilderness",
+            "마을": "at the edge of a small rural village, simple local houses nearby",
+            "도시": "on a street of a busy local city, shops and buildings nearby"}
+
+
+def build_prompt(state):
+    w = state.weather
+    time_of_day = "at night, dark sky" if state.is_night else "in daylight"
+    category = weather_category(w.get("code", 0))
+    visuals = WEATHER_VISUALS[category]
+    if w["wind_speed"] >= 40:
+        visuals += " Strong wind: vegetation bending hard, dust, sand or snow blowing through the air."
+    weather_line = (f"IMPORTANT, the weather must be clearly noticeable. {visuals} " if visuals else "")
+    no_list = ("The frame contains only the place itself: no hands, no arms, no held objects, "
+               "no weapons, no guns, no people, no characters, no game HUD, no text, no watermark.")
+    region = f"{state.place_name} (latitude {state.lat}, longitude {state.lon})"
+    climate = state.climate or {}
+    climate_line = (f"Climate: {climate['label_en']}. Season: {climate['season_en']}. "
+                    "Ground, vegetation and colors must match this climate and season exactly. "
+                    if climate else "")
+    # 그림에는 GM이 밝힌 것만 그린다 → 그림에만 있고 게임에는 없는 건물이 생기지 않게 한다
+    features = ", ".join(state.scene_features)
+    only_line = (f"Clearly show these and make each one recognizable: {features}. " if features else "")
+    if state.place_type == "야생" and not state.indoor:
+        only_line += ("Do NOT draw any building, hut, house, road, vehicle, fence or other man-made structure "
+                      "unless it is named above. ")
+    else:
+        only_line += "Do not add prominent landmarks or vehicles that are not named above. "
+
+    if state.indoor:
+        # 실내 장면: GM이 묘사한 공간을 그리고, 날씨는 창문·문틈 너머로 보이게 한다
+        inside = state.scene_desc or f"the inside of a simple local building ({state.scene_place})"
+        outside = WEATHER_VISUALS[category].split(":")[0] if visuals else w["description_en"]
+        return (
+            "An atmospheric interior illustration, eye-level view from inside the room. "
+            f"Interior: {inside} {only_line}"
+            f"The building is in {region}; {climate_line}"
+            "furniture, materials and architecture authentic to that region. "
+            f"Through the window or doorway: {outside}, {w['temperature']:.0f} degrees Celsius outside, {time_of_day}. "
+            "Dim natural light, highly detailed. " + no_list
+        )
+
+    focus = f"Scene: {state.scene_desc} " if state.scene_desc else ""
+    return (
+        "A wide scenic illustration, like a travel documentary establishing shot. "
+        f"Location: {region}. {focus}{only_line}"
+        f"Surroundings: {BIOMES[state.biome][1]}, {PLACE_EN[state.place_type]}. {climate_line}"
+        f"Weather: {w['description_en']}, {w['temperature']:.0f} degrees Celsius, {time_of_day}. "
+        + weather_line
+        + "Eye-level view, moody atmospheric lighting, highly detailed, "
+        "architecture authentic to the region. " + no_list
+    )
+
+
+def describe_image(client, path):
+    """생성된 이미지를 Vision(이미지 → 텍스트)으로 읽어, 실제로 그려진 주요 대상을 목록으로 돌려준다.
+
+    이미지 모델이 지시하지 않은 건물 등을 그려 넣는 경우가 있다. 그림에 보이는 것을 게임 마스터에게
+    알려 주면 "그림에는 있는데 게임에는 없는" 상황을 막을 수 있다. 실패하면 빈 목록.
+    """
+    try:
+        with open(path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
+        response = client.responses.create(
+            model=LLM_MODEL,
+            max_output_tokens=150,
+            input=[{"role": "user", "content": [
+                {"type": "input_text",
+                 "text": "이 그림에서 눈에 띄는 건물, 구조물, 탈것, 지형지물(강, 호수, 바위산, 숲 등)을 "
+                         "한국어 명사구로 최대 6개, 쉼표로만 구분해 나열해. 설명이나 문장은 쓰지 마. "
+                         "예: 통나무 오두막, 얼어붙은 호수, 침엽수림"},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "low"},
+            ]}],
+        )
+        things = [s.strip(" .\n-") for s in (response.output_text or "").replace("\n", ",").split(",")]
+        return [s[:30] for s in things if s][:6]
+    except Exception as e:
+        print(f"[이미지] 그림 읽기 실패: {e}")
+        return []
+
+
+def generate_scene(client, state):
+    """장면 이미지를 생성해 파일로 저장하고 경로를 반환한다. 실패하면 None."""
+    try:
+        result = client.images.generate(
+            model=IMAGE_MODEL,
+            prompt=build_prompt(state),
+            size="1536x1024",
+            quality="low",   # 비용 절약
+        )
+        image_bytes = base64.b64decode(result.data[0].b64_json)   # Base64 → 이미지
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        path = OUTPUT_DIR / f"scene_{int(time.time() * 1000)}.png"
+        with open(path, "wb") as f:
+            f.write(image_bytes)
+        return str(path)
+    except Exception as e:
+        print(f"[이미지] 생성 실패: {e}")
+        return None
