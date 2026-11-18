@@ -149,9 +149,23 @@ TOOLS = [
     ),
     _function(
         "seek_help",
-        "플레이어가 직접 한국 공관(대사관·영사관)에 연락하거나 공항으로 가려 할 때 호출한다. 조건이 되면 엔진이 "
-        "실제 위치의 가장 가까운 공관·공항으로 가는 기회를 만든다. 조건이 안 되면 이유를 돌려준다(그대로 서술한다).",
-        {"kind": {"type": "string", "enum": ["embassy", "airport"], "description": "embassy 공관, airport 공항"}},
+        "귀국을 위한 도움. 플레이어가 직접 원하면 이번 턴에 바로 처리된다(기회처럼 기다리지 않는다). "
+        "embassy: 한국 공관(대사관·총영사관)에 연락하고 그곳으로 간다. "
+        "airport: 도시에서 국제공항으로 간다. "
+        "repatriation: 공관 안에서 귀국 지원을 요청한다(가족 송금으로 한국행 항공권 마련). "
+        "조건이 안 되면 이유를 돌려준다(그대로 서술한다).",
+        {"kind": {"type": "string", "enum": ["embassy", "airport", "repatriation"],
+                  "description": "embassy 공관, airport 공항, repatriation 공관에서 귀국 항공권 지원"}},
+    ),
+    _function(
+        "add_character",
+        "이 장소에서 이름이나 역할이 있는 인물을 처음 등장시킬 때 호출한다(영사, 여관 주인, 트럭 기사 등). "
+        "이미 [등장인물]에 있는 사람은 다시 만들지 말고 같은 이름·역할·생김새로 계속 등장시킨다.",
+        {
+            "name": {"type": "string", "description": "이름 또는 부르는 말. 예: '김민수 영사', '여관 주인 아흐메드'"},
+            "role": {"type": "string", "description": "역할. 예: '영사과 담당 영사'"},
+            "look": {"type": "string", "description": "겉모습 한 줄. 예: '40대, 회색 양복, 안경'"},
+        },
     ),
     _function(
         "pay",
@@ -270,6 +284,9 @@ def execute_tool(state, name, arguments, client=None):
             result = {"ok": True}
         elif name == "seek_help":
             result = state.seek_help(str(args.get("kind", "")))
+        elif name == "add_character":
+            person = state.add_character(args.get("name", ""), args.get("role", ""), args.get("look", ""))
+            result = {"ok": True, "인물": person} if person else {"error": "이름이 필요하다"}
         elif name == "pay":
             result = state.pay(args.get("amount", 0), str(args.get("purpose", "")))
         elif name == "acquire_vehicle":

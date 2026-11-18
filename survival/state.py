@@ -106,7 +106,10 @@ class GameState:
     leads: list = field(default_factory=list)            # [{id, kind, label, clue, target, km, bearing, ...}]
     lead_seq: int = 0
     facts: list = field(default_factory=list)            # [{text, scope: here/always, turn}]
-    flags: dict = field(default_factory=dict)            # on_road, can_call, embassy_visited, at_airport
+    flags: dict = field(default_factory=dict)            # on_road, can_call, embassy_visited, at_airport, at_embassy
+    characters: list = field(default_factory=list)       # 이 장소에서 만난 인물 [{name, role, look}]
+    image_scene: str = ""             # 지금 그림이 그려진 장면 (장소+장면 이름)
+    image_night: bool = False         # 지금 그림이 밤 그림인지
     wanted: float = 0.0               # 수배도 0~100
     _snapshot: dict = field(default_factory=dict)
 
@@ -136,18 +139,51 @@ class GameState:
     def indoor(self):
         return self.scene_setting == "indoor"
 
+    def same_place(self, setting, place):
+        """지금 장면과 같은 곳인지. '한국 공관 영사과'와 '영사과 창구'처럼 이름이 조금 달라도 같은 곳으로 본다."""
+        if setting != self.scene_setting or not self.scene_place or not place:
+            return setting == self.scene_setting and place == self.scene_place
+        a, b = self.scene_place.replace(" ", ""), place.replace(" ", "")
+        if a in b or b in a:
+            return True
+        words_a = {w for w in self.scene_place.split() if len(w) >= 2}
+        words_b = {w for w in place.split() if len(w) >= 2}
+        return bool(words_a & words_b)
+
     def set_scene(self, setting, place, description_en, features=None):
-        """장면을 바꾼다. 실내외가 바뀌거나 다른 곳으로 옮겼으면 이미지를 새로 그리게 한다."""
+        """장면을 바꾼다. 다른 곳으로 옮겼을 때만 묘사를 바꾸고 그림을 새로 그린다.
+
+        같은 곳에 머무는 동안에는 처음 정한 묘사·보이는 것을 그대로 둔다. 그래야 그림 속 구성과
+        인물이 바뀌지 않는다. (보이는 것이 새로 생겼다면 목록에 덧붙이기만 한다)
+        """
         setting = setting if setting in ("outdoor", "indoor") else "outdoor"
         place = str(place or "").strip()[:30]
-        changed = setting != self.scene_setting or place != self.scene_place
+        features = [str(f).strip()[:30] for f in (features or []) if str(f).strip()]
+        if self.scene_place and self.same_place(setting, place):
+            new = [f for f in features if f not in self.scene_features]
+            self.scene_features = (self.scene_features + new)[:8]
+            return False
         self.scene_setting, self.scene_place = setting, place
         self.scene_desc = str(description_en or "").strip()[:400]
-        self.scene_features = [str(f).strip()[:30] for f in (features or []) if str(f).strip()][:6]
-        if changed:
-            self.scene_dirty = True
-            self.scene_seen = []       # 새 그림이 그려지면 다시 읽어 들인다
-        return changed
+        self.scene_features = features[:6]
+        self.scene_dirty = True
+        self.scene_seen = []           # 새 그림이 그려지면 다시 읽어 들인다
+        self.characters = []           # 다른 곳으로 옮기면 그곳의 인물은 새로 만난다
+        self.flags.pop("at_embassy", None)
+        return True
+
+    def add_character(self, name, role, look=""):
+        """이 장소에서 만난 인물을 기록한다. 같은 사람은 이름·역할·생김새가 바뀌지 않는다."""
+        name, role, look = str(name).strip()[:20], str(role).strip()[:30], str(look).strip()[:80]
+        if not name:
+            return None
+        for person in self.characters:
+            if person["name"] == name or (role and person["role"] == role):
+                return person          # 이미 있는 사람: 처음 정한 모습 그대로
+        person = {"name": name, "role": role, "look": look}
+        self.characters.append(person)
+        self.characters = self.characters[-6:]
+        return person
 
     def visible_things(self):
         """지금 화면(장면 이미지)에 보이는 것들: GM이 밝힌 것 + 실제 그림에서 읽어낸 것."""
@@ -763,20 +799,28 @@ class GameState:
         offer["text"] = offer["text"].replace("{dest}", dest["label"])
         return self._finish_offer(offer)
 
-    def seek_help(self, kind):
-        """플레이어가 직접 공관에 연락하거나 공항에 가려 할 때. 조건이 되면 그 기회를 지금 만든다."""
+    def seek_help(self, kind, go_now=True):
+        """플레이어가 직접 공관·공항으로 가거나 귀국 지원을 요청할 때.
+
+        플레이어가 스스로 정한 일이므로 '기회'처럼 다음 턴까지 기다리지 않고 이번 턴에 바로 출발한다.
+        """
         from .events import MAJOR_EVENTS
+        if kind == "repatriation":
+            return self.repatriate()
         need = {"embassy": "contact", "airport": "airport"}.get(kind)
         if need is None:
-            return {"success": False, "message": "kind 는 embassy 또는 airport 이다."}
+            return {"success": False, "message": "kind 는 embassy, airport, repatriation 중 하나다."}
         if need not in self.offer_needs():
             if kind == "embassy":
                 why = ("이미 공관의 도움을 받았다." if self.flags.get("embassy_visited")
                        else "여기서는 연락할 방법이 없다. 마을·도시로 가거나 휴대폰 신호가 잡히는 곳을 찾아야 한다.")
             else:
                 why = ("공항은 도시에서만 갈 수 있다." if self.place_type != "도시" else
+                       "이미 공항에 있다." if self.flags.get("at_airport") else
                        "아직 공항으로 갈 방법을 찾지 못했다. 공관에서 서류와 지원을 받거나, 며칠 더 버티며 여비를 모아야 한다.")
             return {"success": False, "message": why}
+        if go_now and self.turn_flags.get("travel"):
+            return {"success": False, "message": "이번 턴에는 이미 이동했다. 다음 턴에 가자."}
         template = next(e for e in MAJOR_EVENTS if e["id"] == kind)
         offer = {"id": kind, "text": template["text"], "accept": template["accept"],
                  "hours": template.get("hours", 0), "stats": dict(template.get("stats", {})),
@@ -791,8 +835,35 @@ class GameState:
         self.offer = offer
         self.last_major_turn = self.turn
         self.event = None
-        return {"success": True, "message": f"{offer['text']} (잘 풀리면: {offer['detail']})",
-                "안내": f"이번 턴에 이 제안을 서술하고, 플레이어가 다음 턴에 '{offer['accept']}'를 택하면 accept_offer 를 호출하라."}
+        if not go_now:
+            return {"success": True, "message": f"{offer['text']} (잘 풀리면: {offer['detail']})",
+                    "안내": f"플레이어가 '{offer['accept']}'를 택하면 accept_offer 를 호출하라."}
+        result = self.accept_offer()
+        result["안내"] = "플레이어가 직접 요청한 일이라 이번 턴에 바로 이동했다. 도착한 곳에서의 상황으로 서술을 마무리하라."
+        return result
+
+    def repatriate(self):
+        """공관의 귀국 지원: 가족이 보낸 돈(신속해외송금)으로 한국행 항공권을 마련해 준다."""
+        if not self.flags.get("at_embassy"):
+            return {"success": False,
+                    "message": "귀국 지원은 한국 공관 안에서만 받을 수 있다. 먼저 seek_help(kind='embassy') 로 공관에 가야 한다."}
+        if self.find_ticket("flight"):
+            return {"success": False, "message": "이미 한국행 항공권이 있다. 공항으로 가면 된다."}
+        if self.wanted >= WANTED_AIRPORT_LIMIT:
+            return {"success": False,
+                    "message": "현지 경찰의 수배 기록 때문에 공관도 당장 출국을 도울 수 없다. 수배가 풀릴 때까지 기다려야 한다."}
+        fare = self.fare("flight", self.distance)
+        self.pass_time(2, "rest", sheltered=True)          # 가족과 통화하고 송금을 받는 시간
+        self.tickets.append({"method": "flight", "km": round(self.distance), "item": "한국행 항공권", "price": fare})
+        self.items.append("한국행 항공권")
+        self.flags["repatriation"] = True
+        self.turn_flags["ticket"] = {"item": "한국행 항공권", "price": fare, "sponsored": True}
+        self.turn_flags["time"] = 1
+        self.remember("공관의 도움으로 가족이 송금한 돈으로 한국행 항공권을 마련했다. 공항으로 가서 타기만 하면 된다.",
+                      "always")
+        return {"success": True,
+                "message": f"영사가 가족과 연락해 신속해외송금으로 한국행 항공권(${fare:,.0f})을 마련해 주었다. "
+                           "소지금은 줄지 않았다. 이제 공항으로 가면 된다(seek_help(kind='airport'))."}
 
     def _finish_offer(self, offer):
         details = []
@@ -874,8 +945,10 @@ class GameState:
                     self.place_name = f"{self.place_name.split(',')[0]}, {dest['name']}" if self.place_name else dest["name"]
                 if reached and dest["type"] == "embassy":
                     self.flags["embassy_visited"] = True
+                    self.flags["at_embassy"] = True
                     self.set_scene("indoor", "한국 공관 영사과", "Inside a small consular office: a service counter, "
                                    "a Korean flag, waiting chairs and document forms.", ["민원 창구", "태극기", "대기 의자"])
+                    self.flags["at_embassy"] = True        # set_scene 이 지운 표시를 다시 남긴다
                     self.remember(f"{dest['label']}에 도착해 영사 지원을 받음. 여행증명서를 발급받을 수 있다.", "always")
                     self.last_major_turn = self.turn - 5          # 다음 기회(공항 등)가 머지않아 온다
                 elif reached and dest["type"] == "airport":
@@ -980,8 +1053,7 @@ class GameState:
             self.offer = None            # 제안은 나온 다음 턴까지만 유효하다
         now = self._tracked()
         self.delta = {k: round(now[k] - self._snapshot.get(k, now[k]), 2) for k in now}
-        if self._snapshot.get("night") is not None and self._snapshot["night"] != self.is_night:
-            self.scene_dirty = True      # 낮↔밤이 바뀌면 장면을 다시 그린다
+        # 낮↔밤 변화는 장면이 바뀐 것이 아니다. 그림은 같은 장면을 편집해 빛만 바꾼다 (app.py)
 
     def refresh_risk(self):
         self.risk = predict_risk(self.weather, self.health, self.satiety, self.hydration,

@@ -60,22 +60,49 @@ def view(state, chat, busy=False):
     )
 
 
-def needs_new_image(state):
+def scene_key(state):
+    return f"{state.place_name}|{state.scene_setting}|{state.scene_place}"
+
+
+def image_update(state):
+    """그림을 어떻게 갱신할지: 'new' 새로 그림 / 'edit' 같은 장면의 빛·날씨만 고침 / None 그대로.
+
+    - 다른 곳으로 옮겼거나 장면이 바뀌었으면 새로 그린다.
+    - 같은 곳에서 낮↔밤이나 비·눈·폭풍이 바뀌었으면, 야외는 이전 그림을 편집해 빛·날씨만 바꾼다.
+      실내는 창밖 정도만 달라지므로 다시 그리지 않는다. 그래야 구성과 인물이 바뀌지 않는다.
+    """
     if state.status == "dead":
-        return False
-    return (state.image_path is None or state.scene_dirty
-            or state.moved_since_image >= REDRAW_DISTANCE_KM
-            or state.image_weather != weather_category(state.weather.get("code", 0)))  # 비·눈·폭풍이 시작/그침
+        return None
+    if (state.image_path is None or state.scene_dirty or state.image_scene != scene_key(state)
+            or state.moved_since_image >= REDRAW_DISTANCE_KM):
+        return "new"
+    changed = (state.image_night != state.is_night
+               or state.image_weather != weather_category(state.weather.get("code", 0)))
+    if changed and not state.indoor:
+        return "edit"
+    return None
+
+
+def needs_new_image(state):
+    return image_update(state) is not None
 
 
 def draw_scene(state):
-    path = imagegen.generate_scene(get_client(), state)
-    if path:
-        state.image_path = path
-        # 실제로 그려진 것을 읽어 두었다가 다음 턴에 게임 마스터에게 알려 준다 (그림과 서술의 일치)
-        state.scene_seen = imagegen.describe_image(get_client(), path)
+    mode = image_update(state)
+    if mode == "edit":
+        path = imagegen.edit_scene(get_client(), state, state.image_path)
+        if path:
+            state.image_path = path    # 같은 장면이라 보이는 것(scene_seen)은 그대로 둔다
+    elif mode == "new":
+        path = imagegen.generate_scene(get_client(), state)
+        if path:
+            state.image_path = path
+            # 실제로 그려진 것을 읽어 두었다가 다음 턴에 게임 마스터에게 알려 준다 (그림과 서술의 일치)
+            state.scene_seen = imagegen.describe_image(get_client(), path)
     state.scene_dirty = False
     state.moved_since_image = 0.0
+    state.image_scene = scene_key(state)
+    state.image_night = state.is_night
     state.image_weather = weather_category(state.weather.get("code", 0))
     savegame.save(state)
 

@@ -29,11 +29,26 @@ INSTRUCTIONS = """
 - 결과는 그 장소와 시간에 맞아야 한다. 밤에 도착한 마을은 대부분 잠들어 있고, 사막의 연기는 유목민 천막,
   숲의 엔진 소리는 임도나 벌목장일 가능성이 크다. 엔진이 돌려준 사실은 이런 점을 이미 반영한 것이다.
 
-[귀환으로 이어지는 길]
+[귀환으로 이어지는 길 - 끌지 않는다]
 - 한국 공관(대사관·총영사관)은 여행증명서와 긴급 지원금을 준다. 플레이어가 공관에 연락하거나 가려 하면
   seek_help(kind='embassy') 를 호출한다. 공항으로 가려 하면 seek_help(kind='airport') 를 호출한다.
+  플레이어가 직접 원한 것이므로 엔진이 그 턴에 바로 이동시킨다.
+- 공관 안에서 플레이어가 한국으로 돌아가고 싶다고 하면 seek_help(kind='repatriation') 를 호출한다.
+  가족 송금으로 한국행 항공권이 마련된다.
+- 귀국 길이 열린 뒤에는 시간을 끌지 않는다. "서류가 내일 나온다", "담당자가 자리에 없다", "다시 오라" 같은
+  지연을 GM이 지어내지 않는다(지연은 엔진이 기회의 나쁜 결과로 정했을 때만 있다). 공항에서 항공권이 있으면
+  플레이어가 타겠다고 할 때 바로 travel(method='flight') 를 호출한다.
+- 공관·공항에서의 추천 행동은 귀국으로 바로 이어지는 것을 첫 번째로 둔다(예: "귀국 지원을 요청한다",
+  "공항으로 간다", "한국행 비행기에 탑승한다").
 - 공항은 한국으로 바로 갈 수 있는 곳이라, 공관의 도움을 받았거나 충분히 시간이 지난 뒤 도시에 있을 때만
   갈 수 있다. 엔진이 거절하면 그 이유를 자연스럽게 서술한다.
+
+[같은 장소, 같은 사람]
+- 같은 곳에 머무는 동안 그곳의 구조, 가구, 물건 배치는 바뀌지 않는다. 같은 건물 안에서 다른 방으로
+  옮기거나 밖으로 나갈 때만 set_scene 을 호출한다. 같은 곳을 다른 말로 다시 설정하지 않는다.
+- 이름이나 역할이 있는 인물을 처음 등장시키면 add_character 로 기록한다. [등장인물]에 있는 사람은 같은
+  이름·역할·생김새로 계속 등장시키고, 다른 사람으로 바꾸지 않는다.
+- 시간이 흐르면 빛, 창밖 풍경, 사람들의 피로 같은 것만 달라진다.
 
 [그림과 서술의 일치 - 매우 중요]
 - 플레이어는 장면 이미지를 보면서 플레이한다. 이미지는 set_scene 에 적은 내용으로 그려진다.
@@ -194,6 +209,14 @@ def build_input(state, player_text, recap=None):
     if visible:
         parts += ["[화면에 보이는 것 - 플레이어가 보고 있는 장면 이미지에 그려진 대상. 모두 실제로 존재한다]",
                   ", ".join(visible)]
+    if state.characters:
+        parts += ["[등장인물 - 이 장소에서 이미 만난 사람. 같은 이름·역할·생김새로 계속 등장시킨다]",
+                  "\n".join(f"- {c['name']} ({c['role']}){': ' + c['look'] if c['look'] else ''}"
+                            for c in state.characters)]
+    if state.scene_place:
+        parts += ["[지금 장면 - 같은 곳에 있는 동안 바뀌지 않는다]",
+                  f"{'실내' if state.indoor else '야외'} · {state.scene_place}"
+                  + (f" · 보이는 것: {', '.join(state.scene_features)}" if state.scene_features else "")]
     if state.facts:
         parts += ["[확정된 사실 - 이미 일어난 일. 서술은 반드시 이것과 이어져야 한다]",
                   "\n".join(f"- {f['text']}" for f in state.facts)]
@@ -340,8 +363,11 @@ def collect_notices(state):
                         "text": clue + "그쪽으로 가 보면 정체를 알 수 있습니다. 예: “" + lead["label"] + " 쪽으로 간다”"})
     bought = flags.get("ticket")
     if bought and state.find_ticket_by_item(bought["item"]):
-        notices.append({"kind": "info", "title": f"🎫 예약 완료 — {bought['item']}",
-                        "text": f"${bought['price']:,.0f} 결제. 표는 탈 때까지 유지됩니다."})
+        paid = ("가족 송금(신속해외송금)으로 마련 — 소지금은 그대로입니다." if bought.get("sponsored")
+                else f"${bought['price']:,.0f} 결제.")
+        notices.append({"kind": "good" if bought.get("sponsored") else "info",
+                        "title": f"🎫 {'귀국 항공권 확보' if bought.get('sponsored') else '예약 완료'} — {bought['item']}",
+                        "text": paid + " 표는 탈 때까지 유지됩니다."})
     moved = flags.get("moved")
     if moved and state.status == "playing":
         cost = f" · 요금 ${moved['cost']:.0f}" if moved["cost"] else ""
