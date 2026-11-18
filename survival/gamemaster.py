@@ -35,10 +35,12 @@ INSTRUCTIONS = """
   엔진이 이동을 거절하면 그 이유를 자연스럽게 서술한다.
 
 [귀환으로 이어지는 길 - 끌지 않는다]
-- 이동 툴(go_to, follow_lead, travel)은 플레이어가 그곳으로 가겠다고 말했을 때만 쓴다. "쉴 곳을 찾는다",
+- 이동 툴(go_to, follow_lead, travel, accept_offer)은 플레이어가 그 이동을 말했을 때만 쓴다. 엔진도 플레이어의
+  입력을 확인해, 말하지 않은 이동은 거절한다. "쉴 곳을 찾는다",
   "물을 찾는다"처럼 주변에서 무언가를 찾는 행동은 이동이 아니다. 지금 있는 곳 근처에서 찾고(advance_time),
   찾은 곳으로 옮겼다면 set_scene 으로 그 장소(나무 그늘, 바위 틈 등)를 정한다. 장소유형(야생/마을/도시)은
-  그대로다.
+  그대로다. 야생에서 몇 걸음·몇 km 옮겼다고 마을이 나타나지 않는다. 마을은 go_to(village)나 단서로만 찾는다.
+- 장소유형은 엔진만 바꾼다. 서술에서 장소유형을 바꾸지 않는다(야생에 있는데 '마을에 들어섰다'고 쓰지 않는다).
 - 이동 툴을 썼다면 서술은 엔진이 돌려준 도착지에서 끝나야 한다. 원래 자리에 머문 것처럼 쓰지 않는다.
 - 플레이어가 목적지를 정해 가려 하면 go_to 를 호출한다: 가장 가까운 마을(village), 도시(city),
   한국 공관(embassy), 공항(airport). 엔진이 지금 상황(야생·마을·도시, 탈것, 돈, 밤낮)에서 현실적으로 갈 수
@@ -189,7 +191,7 @@ INSTRUCTIONS = """
   짧은 구절만. 대상: 돌발 이벤트와 새로 나타난 인물("**한 여행자가 말을 걸어온다**"), 얻거나 잃은
   물건("**마른 장작**"), 위험 신호와 부상("**손끝의 감각이 없다**"), 새로 발견한 장소나 기회.
 - 게임이 계속되면 마지막에 플레이어가 고를 만한 행동 3가지를 아래 형식으로 정확히 적는다.
-  (각 15자 이내, 서로 성격이 다른 행동으로)
+  (각각 한 줄, 25자 안팎의 짧은 문장으로, 서로 성격이 다른 행동으로)
 ▶ 행동1
 ▶ 행동2
 ▶ 행동3
@@ -387,7 +389,17 @@ def ensure_scene(client, text, state):
 
     (엔진은 이미 플레이어를 옮겼고 그림도 그곳을 그린다. 서술이 옛 장소에 머물면 그림과 어긋난다)
     """
-    if not state.turn_flags.get("scene_changed") or not state.scene_place or state.status != "playing":
+    if state.status != "playing":
+        return text
+    if state.place_changed() and not state.scene_place:
+        # 장면 이름이 아직 없는 새 장소(장거리 이동 직후): 장소 유형에 맞는 말이 서술에 있어야 한다
+        words = {"마을": ["마을"], "도시": ["도시", "시내", "거리"],
+                 "야생": [state.biome_name, "벌판", "황야", "들판", "숲", "초원", "사막", "설원", "정글", "길"]}[state.place_type]
+        body = re.sub(r"^\s*▶.*$", "", text, flags=re.MULTILINE)
+        if any(w in body for w in words):
+            return text
+        return f"*📍 지금 위치: {state.place_name} · {state.place_type}*\n\n" + text
+    if not state.turn_flags.get("scene_changed") or not state.scene_place:
         return text
     words = scene_words(state)
     body = re.sub(r"^\s*▶.*$", "", text, flags=re.MULTILINE)
@@ -537,7 +549,7 @@ def split_suggestions(text):
     """GM 응답에서 '▶ 행동' 줄을 분리한다. → (본문, [행동들])"""
     suggestions = [s.strip() for s in re.findall(r"^\s*▶\s*(.+)$", text, flags=re.MULTILINE)]
     body = re.sub(r"^\s*▶.*$", "", text, flags=re.MULTILINE).strip()
-    return body, [s[:24] for s in suggestions[:3]]
+    return body, [s.strip(" .")[:60] for s in suggestions[:3]]
 
 
 def run_turn(state, player_text=None):
@@ -593,6 +605,7 @@ def run_turn(state, player_text=None):
         )
 
     state.prev_response_id = response.id
+    state.guard_unrequested_move()
     auto_consume(state, player_text)
     auto_charge(state, response.output_text)
     auto_money(state, response.output_text)

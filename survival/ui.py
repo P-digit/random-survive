@@ -79,7 +79,8 @@ footer { display: none !important; }
   padding: 1px 5px; border-radius: 4px; }
 #log em { color: var(--muted); font-style: normal; font-size: 13px;
   font-family: 'JetBrains Mono', monospace; }
-#actions button { font-size: 14px; min-height: 44px; border: 1px solid var(--line);
+#actions button { font-size: 14px; min-height: 44px; height: auto; white-space: normal; word-break: keep-all;
+  line-height: 1.4; padding: 8px 12px; text-align: center; border: 1px solid var(--line);
   transition: border-color .15s, transform .15s; }
 #actions button:hover { border-color: var(--amber); transform: translateY(-1px); }
 #start-btn { font-family: 'Black Han Sans', sans-serif; font-size: 18px; letter-spacing: 1px; }

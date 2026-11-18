@@ -39,6 +39,23 @@ IMPOSSIBLE = ("텔레포트", "순간이동", "마법", "타임머신", "워프"
 TICKET_WORDS = ("티켓", "항공권", "탑승권", "승차권", "승선권", "버스표", "기차표", "열차표", "배표", "비행기표")
 
 
+def arrival_place(method, city):
+    """이동한 뒤 도착한 곳의 장소 유형. 주사위가 아니라 규칙으로 정한다.
+
+    - 걷기·운전(내 탈것): 길 위의 어딘가 → 야생. 단, 실제 도시(15km 이내) 근처면 도시.
+    - 버스·히치하이킹: 버스는 정류장에, 차를 얻어 타면 기사가 사람 사는 곳에 내려 준다 → 마을.
+      실제 도시(30km 이내) 근처면 도시.
+    - 기차·배·비행기: 역·항구·공항은 도시에 있다 → 도시.
+    사람 사는 곳에 '우연히' 도착하는 일은 없다. 마을은 go_to·단서로 찾아가야 한다.
+    """
+    near = city["km"] if city else 10 ** 9
+    if method in ("train", "ship", "flight"):
+        return "도시"
+    if method in ("bus", "hitchhike", "offer"):
+        return "도시" if near <= 30 else "마을"
+    return "도시" if near <= 15 else "야생"
+
+
 def item_problem(name):
     """소지품으로 넣을 수 없는 이름이면 그 이유를, 문제없으면 None을 반환한다."""
     if any(word in name for word in TICKET_WORDS):
@@ -633,7 +650,7 @@ class GameState:
         empty = v["range_km"] <= 5
         if empty:
             self.vehicle = None
-        arrived = self._relocate(new_lat, new_lon, km, "hitchhike")
+        arrived = self._relocate(new_lat, new_lon, km, "drive")
         self.turn_flags["moved"] = {"how": name, "km": round(km), "cost": 0, "ticket": None}
         tail = f" 연료가 바닥나 {name}을(를) 버려야 했다." if empty else f" 남은 연료로 약 {v['range_km']}km를 더 갈 수 있다."
         if arrived:
@@ -696,6 +713,10 @@ class GameState:
                                + (f" ({ticket['item']}은(는) 그대로 가지고 있다.)" if ticket else "")}
         if self.early and method in ("train", "ship", "flight"):
             return {"success": False, "message": self.early_message()}
+        if method == "walk" and float(km) < 5:
+            return {"success": False,
+                    "message": "5km도 안 되는 짧은 이동은 장거리 이동(travel)이 아니다. 같은 지역 안에서 자리를 옮긴 "
+                               "것이므로 advance_time 과 set_scene 으로 처리하라. 장소유형은 그대로다."}
         km = clamp(float(km), 1, min(rule["max_km"], self.distance))
         if self.early:
             km = min(km, EARLY_MAX_TRAVEL_KM)
@@ -750,9 +771,11 @@ class GameState:
             return {"success": True, "arrived_in_korea": True,
                     "message": f"{rule['label']}(으)로 {km:.0f}km 이동해 마침내 한국에 도착했다!"}
         return {"success": True, "arrived_in_korea": False, "cost": cost,
+                "도착한_장소유형": self.place_type,
                 "message": f"{rule['label']}(으)로 {km:.0f}km 이동했다. 요금 ${cost:.0f}. "
                            f"도착한 곳: {self.place_name} ({self.place_type}, {self.biome_name}). "
-                           f"한국까지 {self.distance:.0f}km 남았다."}
+                           f"한국까지 {self.distance:.0f}km 남았다. 서술은 이 장소유형({self.place_type})에서 끝나야 한다."
+                           + (" 사람 사는 곳이 아니다. 마을을 만난 것처럼 쓰지 마라." if self.place_type == "야생" else "")}
 
     def _relocate(self, new_lat, new_lon, km, method):
         """좌표를 옮기고 새 장소 정보를 갱신한다. 한국에 도착했으면 True."""
@@ -1220,21 +1243,8 @@ class GameState:
         self.country_en = (place or {}).get("country_en", "") or self.country_en
         self.refresh_climate()
         self.biome = classify_biome(self.lat, self.weather, self.climate)
-        roll = random.random()
         before = self.place_type
-        if method == "walk":
-            if before == "야생":
-                self.place_type = "마을" if roll < village_chance else "야생"
-            elif before == "마을":
-                self.place_type = "야생" if roll < 0.6 else "마을"
-            else:
-                self.place_type = "마을" if roll < 0.4 else ("야생" if roll < 0.7 else "도시")
-        elif method == "hitchhike":
-            self.place_type = "마을" if roll < 0.5 else ("도시" if roll < 0.8 else "야생")
-        elif method == "bus":
-            self.place_type = "도시" if roll < 0.55 else "마을"
-        else:
-            self.place_type = "도시"
+        self.place_type = arrival_place(method, places.nearest_city(self.lat, self.lon))
         if self.place_type != before:
             self.scene_dirty = True
 
@@ -1244,6 +1254,30 @@ class GameState:
             self.death_reason = reason
 
     # ---------- 턴 진행 ----------
+    def where(self):
+        """지금 위치·장소의 요약 (턴 사이에 무엇이 바뀌었는지 비교용)."""
+        return {"lat": self.lat, "lon": self.lon, "place_type": self.place_type, "place_name": self.place_name,
+                "biome": self.biome}
+
+    def place_changed(self):
+        before = self._snapshot.get("where")
+        return bool(before) and before["place_type"] != self.place_type
+
+    def guard_unrequested_move(self):
+        """안전장치: 이번 턴에 이동이 일어나지 않았는데(이동 툴이 성공하지 않았는데) 위치나 장소 유형이 바뀌었다면
+        원래대로 되돌린다. 정상이라면 일어나지 않는 일이다. 되돌렸으면 True."""
+        before = self._snapshot.get("where")
+        if not before or self.turn_flags.get("travel"):
+            return False
+        now = self.where()
+        if (now["lat"], now["lon"], now["place_type"]) == (before["lat"], before["lon"], before["place_type"]):
+            return False
+        print(f"[안전장치] 요청 없이 바뀐 위치를 되돌립니다: {before['place_type']} → {now['place_type']}")
+        self.lat, self.lon = before["lat"], before["lon"]
+        self.place_type, self.place_name, self.biome = before["place_type"], before["place_name"], before["biome"]
+        self.distance = geo.distance_to_korea(self.lat, self.lon)
+        return True
+
     def _tracked(self):
         return {"health": self.health, "satiety": self.satiety, "hydration": self.hydration,
                 "energy": self.energy, "money": self.money, "wanted": self.wanted, "distance": self.distance,
@@ -1256,6 +1290,7 @@ class GameState:
         self.turn_flags = {"travel": 0, "time": 0, "intake": False, "consumed": False}
         self._snapshot = self._tracked()
         self._snapshot["night"] = self.is_night
+        self._snapshot["where"] = self.where()
         self.refresh_risk()
         # 극한 지형의 야생에서는 이벤트 판정을 한 단계 더 위험하게 한다
         level = min(2, self.risk["level"] + 1) if self.in_extreme_wild else self.risk["level"]
