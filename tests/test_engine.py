@@ -2101,3 +2101,68 @@ def test_edit_prompt_pins_down_what_is_in_the_picture(game, tmp_path):
     game.start_hour = 22
     edit = imagegen.build_edit_prompt(game)
     assert "Only lights that already exist" in edit and "written in" in edit
+
+
+# ---------- 23차 수정: 기회는 한 번만 ----------
+def supply_offer(game):
+    from survival.events import MAJOR_EVENTS
+    event = next(e for e in MAJOR_EVENTS if e["id"] == "supply")
+    offer = {"id": "supply", "text": event["text"], "accept": event["accept"], "hours": 0.5,
+             "stats": dict(event["stats"]), "items": list(event["items"]), "money": 0, "risk": event["risk"],
+             "bad": dict(event["bad"], chance=0), "move": {}}
+    game.place_type = "야생"
+    game.offer = game.plan_offer(offer)
+    game.offer["turn"] = game.turn
+    game.scene_features = ["낙하산 달린 보급 상자"]
+    return game.offer
+
+
+def test_opened_supply_crate_cannot_be_opened_again(game, monkeypatch):
+    supply_offer(game)
+    game.turn += 1
+    game.begin_turn = lambda: None
+    game.turn_flags = {"player_text": "보급 상자를 연다"}
+    assert game.accept_offer()["success"]
+    assert "생수 2병" in game.items and "열린 빈 보급 상자" in game.scene_features
+    satiety = game.satiety
+    # 다음 턴: 다시 연다 → 엔진이 막는다
+    game.turn += 1
+    game.turn_flags = {"player_text": "보급 상자를 다시 연다"}
+    again = game.accept_offer()
+    assert not again["success"] and "텅 비어" in again["message"]
+    bad_gain = call(game, "update_inventory", add=[{"name": "비상식량 2개", "carryable": True}], remove=[],
+                    source="found", giver="")
+    assert "error" in bad_gain and game.items.count("비상식량 2개") == 1
+    bad_stat = call(game, "update_status", health=0, satiety=40, hydration=40, energy=0, money=0,
+                    money_source="none", consumed_items=[], reason="상자 속 식량")
+    assert "error" in bad_stat and game.satiety == satiety
+    text = gamemaster.build_input(game, "보급 상자를 연다")
+    assert "[끝난 기회" in text and "텅 비어" in text
+    # 같은 곳에서는 보급 상자 기회가 다시 나오지 않는다
+    assert game.offer_closed("supply")
+
+
+def test_declined_offer_cannot_be_accepted_later(game, monkeypatch):
+    supply_offer(game)
+    game.turn += 1
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text="당신은 상자를 그대로 둔다."))
+    gamemaster.run_turn(game, "수상해 보이니 상자는 열지 않는다")
+    assert game.offer is None and game.done_offers[-1]["how"] == "declined"
+    assert any("거절" in n["title"] for n in game.notices)
+    reply_with(monkeypatch, SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="accept_offer", call_id="a", arguments="{}")]),
+        SimpleNamespace(id="r2", output=[], output_text="이미 열지 않기로 했다."))
+    before = list(game.items)
+    gamemaster.run_turn(game, "역시 보급 상자를 연다")
+    assert game.items == before and game.done_offers[-1]["how"] == "declined"
+
+
+def test_gm_decline_tool_and_new_offer_not_declined(game, monkeypatch):
+    supply_offer(game)
+    # 이번 턴에 막 나온 기회는 플레이어가 아직 못 봤다: 거절로 치지 않는다
+    assert not gamemaster.auto_decline(game, "무시하고 걷는다")
+    game.turn += 1
+    out = call(game, "decline_offer", reason="상자를 무시함")
+    assert out["ok"] and game.offer is None
+    from survival.events import DECLINE_WORDS                # 거절이 아닌 말에 걸리지 않는다
+    assert not any(w.replace(" ", "") in "안타깝다가방안가득" for w in DECLINE_WORDS)

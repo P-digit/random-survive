@@ -14,7 +14,7 @@ from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CON
                      WANTED_ON_FAIL, WANTED_ON_SUCCESS,
                      MAJOR_EVENT_PITY_TURNS, START_ITEMS, START_MONEY, TRAVEL_RULES,
                      VITALS_DRAIN)
-from .events import (BIOME_HAZARDS, BIOMES, OFFER_EXIT, PERSISTENT_OFFERS, classify_biome, roll_event,
+from .events import (BIOME_HAZARDS, BIOMES, OFFER_DONE, OFFER_EXIT, PERSISTENT_OFFERS, classify_biome, roll_event,
                      roll_major_event)
 from .risk_model import predict_risk
 from .weather import get_weather, weather_category
@@ -153,6 +153,7 @@ class GameState:
     notorious: list = field(default_factory=list)        # 범죄자로 알려진 곳 [{place, lat, lon, crime, turn}]
     stolen_items: list = field(default_factory=list)     # 훔친 물건 (체포되면 압수)
     expired_offers: list = field(default_factory=list)   # 지나간 기회 [{id, accept, exit, turn}]
+    done_offers: list = field(default_factory=list)      # 받아들이거나 거절해 끝난 기회 [{id, accept, how, turn, lat, lon, note}]
     image_scene: str = ""             # 지금 그림이 그려진 장면 (장소+장면 이름)
     image_night: bool = False         # 지금 그림이 밤 그림인지
     wanted: float = 0.0               # 수배도 0~100
@@ -987,6 +988,41 @@ class GameState:
     def recently_expired(self, offer_id, turns=6):
         return any(e["id"] == offer_id and self.turn - e["turn"] <= turns for e in self.expired_offers)
 
+    def offer_closed(self, offer_id, turns=8, km=20):
+        """같은 기회를 이미 받아들였거나 거절했다: 그곳에서는 다시 나오지 않고, 다른 곳에서도 한동안 나오지 않는다."""
+        return any(d["id"] == offer_id and (self.turn - d["turn"] <= turns
+                                            or geo.haversine_km(self.lat, self.lon, d["lat"], d["lon"]) < km)
+                   for d in self.done_offers)
+
+    def closed_offers_here(self, turns=6, km=3):
+        """지금 이 자리에서(또는 방금) 끝난 기회들. GM에게 '다시 할 수 없다'고 알린다."""
+        return [d for d in self.done_offers
+                if self.turn - d["turn"] <= turns or geo.haversine_km(self.lat, self.lon, d["lat"], d["lon"]) < km]
+
+    def _close_offer(self, offer, how):
+        accepted_note, declined_note = OFFER_DONE.get(offer.get("id"), (
+            f"'{offer.get('accept', '')}' 제안은 이미 받아들여 끝났다.", f"'{offer.get('accept', '')}' 제안은 거절했다."))
+        note = accepted_note if how == "accepted" else declined_note
+        self.done_offers = (self.done_offers + [{"id": offer.get("id"), "accept": offer.get("accept", ""), "how": how,
+                                                 "turn": self.turn, "lat": self.lat, "lon": self.lon,
+                                                 "note": note}])[-10:]
+        self.remember(note)
+        return note
+
+    def decline_offer(self):
+        """플레이어가 기회를 거절했다. 다시 받아들일 수 없다."""
+        offer = self.offer
+        if not offer:
+            return {"ok": False, "message": "지금 거절할 제안이 없다."}
+        note = self._close_offer(offer, "declined")
+        if offer.get("id") in PERSISTENT_OFFERS:
+            self.offer = None                    # 상자는 그 자리에 그대로 있지만, 열지 않기로 했다
+        else:
+            self.expire_offer()                  # 제안한 사람·탈것은 떠난다
+            self.turn_flags.pop("offer_expired", None)
+        self.turn_flags["offer_declined"] = {"accept": offer.get("accept", ""), "text": note}
+        return {"ok": True, "message": note + " 이 기회는 다시 받아들일 수 없다."}
+
     def offer_needs(self):
         """조건이 붙은 기회 중 지금 허용되는 것."""
         needs = []
@@ -1324,6 +1360,12 @@ class GameState:
         """대형 이벤트(기회)를 받아들인다. 좋은 결과일지 나쁜 결과일지는 엔진이 굴려서 정한다."""
         offer = self.offer
         if not offer or self.status != "playing":
+            done = self.closed_offers_here()
+            if done:
+                d = done[-1]
+                return {"success": False,
+                        "message": f"{d['note']} 같은 기회('{d['accept']}')는 다시 할 수 없다. 다시 한 것처럼 서술하거나 "
+                                   "물건·수치를 다시 주지 마라."}
             last = self.expired_offers[-1] if self.expired_offers else None
             if last and self.turn - last["turn"] <= 3:
                 return {"success": False,
@@ -1331,6 +1373,10 @@ class GameState:
                                    "타거나 받아들였다고 서술하지 마라. 이미 떠나고 없다."}
             return {"success": False, "message": "지금 받아들일 수 있는 제안이 없다."}
         self.offer = None
+        self._close_offer(offer, "accepted")
+        if offer.get("id") == "supply":          # 장면 속 상자는 이제 열린 빈 상자다
+            self.scene_features = [f for f in self.scene_features if "상자" not in f] + ["열린 빈 보급 상자"]
+            self.scene_seen = [f for f in self.scene_seen if "상자" not in f]
         bad = offer.get("bad") or {}
         is_bad = bool(bad) and random.random() < bad.get("chance", 0)
         plan = bad if is_bad else offer          # 실제로 적용할 효과
@@ -1518,8 +1564,8 @@ class GameState:
                                           allowed_needs=self.offer_needs())
             if self.offer and self.notorious_here() and self.offer["id"] in ("korean", "news", "trucker", "convoy"):
                 self.offer = None                  # 범죄자로 알려진 곳에서는 아무도 돕겠다고 나서지 않는다
-            if self.offer and self.recently_expired(self.offer["id"]):
-                self.offer = None                  # 방금 놓친 기회가 곧바로 다시 찾아오지는 않는다
+            if self.offer and (self.recently_expired(self.offer["id"]) or self.offer_closed(self.offer["id"])):
+                self.offer = None                  # 방금 놓쳤거나 끝낸 기회가 곧바로 다시 찾아오지는 않는다
             if self.offer:
                 self.offer = self.plan_offer(self.offer)
             if self.offer:               # 지금 장면에 맞는 기회가 없으면 다음 턴에 다시 시도한다

@@ -270,6 +270,12 @@ TOOLS = [
         {"reason": {"type": "string", "description": "맞지 않는 이유를 한 문장으로"}},
     ),
     _function(
+        "decline_offer",
+        "플레이어가 [기회]의 제안을 거절하거나 무시하겠다고 분명히 말했을 때 호출한다(예: '상자는 열지 않는다', "
+        "'트럭은 안 탄다'). 거절한 기회는 다시 받아들일 수 없다.",
+        {"reason": {"type": "string", "description": "플레이어가 거절한 말을 한 문장으로"}},
+    ),
+    _function(
         "accept_offer",
         "[기회]로 주어진 대형 이벤트의 제안을 플레이어가 받아들였을 때 호출한다. 결과가 좋을지 나쁠지는 "
         "게임 엔진이 정해서 돌려준다(outcome). 나쁜 결과면 그대로 냉정하게 서술한다. 이때는 advance_time, travel 을 따로 호출하지 않는다. "
@@ -355,6 +361,35 @@ def gain_problem(state, source, giver=""):
         if enemy:
             return f"{enemy['name']}은(는) 당신에게 원한이 있다({enemy['status'][:40]}…). 아무것도 주지 않는다."
     return None
+
+
+def redone_offer(state):
+    """플레이어가 이미 끝난 기회(예: 이미 연 보급 상자)를 다시 하려는가. 그렇다면 그 기록."""
+    text = (state.turn_flags.get("player_text") or "").replace(" ", "")
+    if not text:
+        return None
+    for done in reversed(state.closed_offers_here()):
+        words = [w for w in clue_words({"label": done["accept"], "clue": "", "direction": ""}) if w]
+        if any(w in text for w in words):
+            return done
+    return None
+
+
+def redo_problem(state, name, args):
+    """끝난 기회를 다시 하며 물건·회복·돈을 다시 얻으려 하면 막는다. 문제가 없으면 None."""
+    done = redone_offer(state)
+    if not done:
+        return None
+    if name == "update_inventory":
+        gaining = bool(args.get("add")) and str(args.get("source", "found")) != "bought"
+    else:
+        gaining = float(args.get("money", 0) or 0) > 0 or (
+            not args.get("consumed_items")
+            and any(float(args.get(k, 0) or 0) > 0 for k in ("satiety", "hydration", "energy", "health")))
+    if not gaining:
+        return None
+    return (f"{done['note']} 같은 기회('{done['accept']}')는 다시 할 수 없으니 물건·회복·돈을 다시 주지 마라. "
+            "이미 끝났다는 것을 서술하라.")
 
 
 def player_asked_for(state, name, args):
@@ -452,6 +487,10 @@ def execute_tool(state, name, arguments, client=None):
             result = state.buy_ticket(args.get("method"), args.get("distance_km", 1))
         elif name == "accept_offer":
             result = state.accept_offer()
+        elif name == "decline_offer":
+            result = state.decline_offer()
+        elif name in ("update_inventory", "update_status") and redo_problem(state, name, args):
+            result = {"error": redo_problem(state, name, args)}
         elif name == "set_scene":
             changed = state.set_scene(args.get("setting"), args.get("place"), args.get("description_en"),
                                       args.get("visible_features"))

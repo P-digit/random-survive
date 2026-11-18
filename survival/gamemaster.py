@@ -102,7 +102,8 @@ INSTRUCTIONS = """
 - 플레이어가 그런 무의미한 행동을 직접 입력하면 한 문장으로 짧게 처리하고 곧바로 본론으로 돌아온다.
 - [기회]가 주어지면 그것은 흔치 않은 대형 이벤트다. 이번 턴 서술의 마지막에 굵은 글씨로 크게 알리고,
   받을지는 플레이어가 정하게 둔다(이 턴에는 accept_offer 를 호출하지 않는다). 다음 턴에 플레이어가
-  받아들이면 accept_offer 를 호출하고 결과를 서술한다. 거절하거나 무시하면 기회는 사라진다.
+  받아들이면 accept_offer 를 호출하고 결과를 서술한다. 분명히 거절하면 decline_offer 를 호출한다.
+  받아들였거나 거절한 기회는 끝난 것이다. 같은 일(이미 연 상자를 다시 열기 등)을 다시 할 수 없다.
   기회에는 위험이 따른다. 제안을 소개할 때 '위험'으로 주어진 불안 요소를 은근히 내비치되, 결과를
   미리 알려 주지는 않는다. accept_offer 의 outcome 이 '나쁜 결과'면 플레이어가 속았거나 일이 틀어진
   것이다. 미화하지 말고 손해를 분명하게 서술한다.
@@ -291,6 +292,12 @@ def build_input(state, player_text, recap=None):
                       f"{state.offer['text']} (잘 풀리면: {state.offer.get('detail', '')}) "
                       "→ 플레이어의 이번 행동이 이 제안을 받아들이는 것이면 accept_offer 를 호출한다. "
                       f"아니면 이번 턴이 끝나며 기회는 사라진다. 서술 끝에 이 모습을 넣는다: '{exit_text}'"]
+    closed = state.closed_offers_here()
+    if closed:
+        parts += ["[끝난 기회 - 이미 받아들였거나 거절했다. 같은 일을 다시 할 수 없다]",
+                  "\n".join(f"- '{d['accept']}' ({'받아들임' if d['how'] == 'accepted' else '거절함'}): {d['note']}"
+                            for d in closed)
+                  + "\n플레이어가 이것을 다시 하려 하면 이미 끝났다는 것을 서술하고, 물건·수치·돈을 다시 주지 않는다."]
     gone = [e for e in state.expired_offers if 0 < state.turn - e["turn"] <= 3]
     if gone and not state.offer:
         parts += ["[지나간 기회 - 이미 떠나고 없다. 다시 나타나지 않는다]",
@@ -550,6 +557,9 @@ def collect_notices(state):
         notices.append({"kind": "bad" if result["bad"] else "good",
                         "title": ("❌ 선택의 대가 — " if result["bad"] else "✅ 기회를 잡았다 — ") + result["title"],
                         "text": result["text"]})
+    declined = flags.get("offer_declined")
+    if declined:
+        notices.append({"kind": "info", "title": f"🚫 기회를 거절했다 — {declined['accept']}", "text": declined["text"]})
     expired = flags.get("offer_expired")
     if expired:
         notices.append({"kind": "info", "title": f"⌛ 기회가 지나갔다 — {expired['accept']}", "text": expired["exit"]})
@@ -606,6 +616,19 @@ def collect_notices(state):
                         "text": f"{o['text']}\n▲ 잘 풀리면: {o['detail']}\n⚠ {o.get('risk', '')}\n"
                                 f"다음 턴까지만 유효 → “{o['accept']}”"})
     return notices
+
+
+def auto_decline(state, player_text):
+    """플레이어가 앞서 나온 기회를 거절한다고 말했는데 GM이 decline_offer 를 부르지 않았으면 엔진이 처리한다."""
+    from .events import DECLINE_WORDS
+    offer = state.offer
+    if not offer or not player_text or offer.get("turn") == state.turn:
+        return False                 # 이번 턴에 막 나온 기회는 플레이어가 아직 보지 못했다
+    text = player_text.replace(" ", "")
+    if any(w.replace(" ", "") in text for w in DECLINE_WORDS):
+        state.decline_offer()
+        return True
+    return False
 
 
 DRINK_VERBS = ("마신", "마셔", "마시", "들이켜", "들이킨", "목을 축")
@@ -772,6 +795,7 @@ def run_turn(state, player_text=None):
 
     state.prev_response_id = response.id
     state.guard_unrequested_move()
+    auto_decline(state, player_text)
     auto_consume(state, player_text)
     auto_eat(state, player_text)
     state.settle_consumption()
