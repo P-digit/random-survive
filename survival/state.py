@@ -192,6 +192,7 @@ class GameState:
         self.scene_dirty = True
         self.scene_seen = []           # 새 그림이 그려지면 다시 읽어 들인다
         self.characters = []           # 다른 곳으로 옮기면 그곳의 인물은 새로 만난다
+        self.turn_flags["scene_changed"] = True
         self.flags.pop("at_embassy", None)
         return True
 
@@ -760,6 +761,7 @@ class GameState:
         self.moved_since_image += km
         if km >= 300:
             self.wanted = clamp(self.wanted - 15)     # 멀리 떠나면 쫓는 사람이 줄어든다
+        self.turn_flags["scene_changed"] = True
         self.scene_setting, self.scene_place, self.scene_desc = "outdoor", "", ""   # 새 장소의 야외에서 시작
         self.scene_features, self.scene_seen = [], []
         if km >= 20:          # 멀리 떠나면 그곳의 단서와 '여기서만' 유효한 사실은 더 이상 의미가 없다

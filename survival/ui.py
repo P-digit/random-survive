@@ -239,8 +239,8 @@ def render_location(state):
         '<div>'
         + (f'<span class="badge">{"🏠" if state.indoor else "🧭"} {escape(state.scene_place)}</span>'
            if state.scene_place else "")
-        + f'<span class="badge">{escape(state.biome_name)}</span>'
-        f'<span class="badge amber">{escape(state.place_type)}</span></div></div>'
+        + f'<span class="badge">지형: {escape(state.biome_name)}</span>'
+        f'<span class="badge amber">장소: {escape(state.place_type)}</span></div></div>'
     )
 
 

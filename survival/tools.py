@@ -270,6 +270,35 @@ TOOLS = [
 ]
 
 
+# 플레이어 입력에 이런 말이 있어야 그 목적지로 이동한다 (GM이 '쉴 곳 찾기'를 마을 이동으로 바꾸지 못하게)
+GO_WORDS = {
+    "village": ("마을", "사람", "인가", "동네", "촌", "집", "정착", "부락", "농가", "민가", "가까운 곳"),
+    "city": ("도시", "시내", "시가지", "큰 마을", "읍"),
+    "embassy": ("대사관", "영사관", "공관", "영사"),
+    "airport": ("공항", "비행기", "항공"),
+    "continue": ("계속", "이어", "가던", "마저", "다시 출발", "출발"),
+}
+DIRECTION_WORDS = ("쪽", "방향", "따라", "향해", "향한다", "향하", "가까이", "다가")
+
+
+def player_asked_for(state, name, args):
+    """GM이 이동 툴을 쓸 때, 플레이어가 정말 그곳으로 가겠다고 했는지. (플레이어 입력이 없으면 허용)"""
+    text = (state.turn_flags.get("player_text") or "").replace(" ", "")
+    if not text:
+        return True
+    if name == "go_to":
+        words = GO_WORDS.get(str(args.get("target", "")), ())
+        return any(w.replace(" ", "") in text for w in words)
+    if name == "follow_lead":
+        lead = state.find_lead(args.get("lead_id", ""))
+        if lead is None:
+            return True                  # 없는 단서는 엔진이 알아서 거절한다
+        words = [w for w in (lead["label"] + " " + lead["clue"]).split() if len(w) >= 2]
+        words += [lead["direction"], lead["direction"].rstrip("쪽")] + list(DIRECTION_WORDS)
+        return any(w.replace(" ", "") in text for w in words if w)
+    return True
+
+
 def execute_tool(state, name, arguments, client=None):
     """툴 이름과 JSON 인자를 받아 게임 상태에 반영하고, LLM에게 돌려줄 결과 문자열을 만든다."""
     try:
@@ -280,6 +309,10 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
+        elif name in ("go_to", "follow_lead") and not player_asked_for(state, name, args):
+            result = {"error": "플레이어는 그곳으로 가겠다고 하지 않았다. 이동 툴을 쓰지 말고, 지금 있는 자리와 그 근처에서 "
+                               "행동을 처리하라(쉴 곳·물·먹을 것을 주변에서 찾기 → advance_time, 찾은 곳으로 옮기면 "
+                               "set_scene). 현재 장면과 장소유형은 그대로다."}
         elif name in ("advance_time", "travel", "follow_lead", "go_to") and state.turn_flags.get("travel", 0) >= 1:
             result = {"error": "이번 턴에는 이미 이동했다. 한 턴에는 플레이어가 지시한 행동 하나만 처리한다. "
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}

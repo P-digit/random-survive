@@ -14,6 +14,7 @@ from survival import climate, gamemaster, geo, knowledge, state as state_module 
 from survival.events import classify_biome, roll_event  # noqa: E402
 from survival.risk_model import predict_risk, train  # noqa: E402
 from survival.state import GameState  # noqa: E402
+from survival import tools as tools_module  # noqa: E402
 from survival.tools import TOOLS, execute_tool  # noqa: E402
 
 
@@ -1358,3 +1359,71 @@ def test_early_game_keeps_you_near_the_drop(game, monkeypatch):
 
     game.elapsed_hours = 40                                                     # 하루 반이 지나면 풀린다
     assert not game.early and "contact" in game.offer_needs()
+
+
+# ---------- 14차 수정: 서술·그림·위치의 일치 ----------
+def test_looking_for_shelter_does_not_move_to_a_village(game, monkeypatch):
+    """'쉴 곳을 찾아 이동한다'를 GM이 마을 이동으로 처리하려 해도 엔진이 막는다 (브라질 초원 사례)."""
+    game.biome, game.place_type = "savanna", "야생"
+    game.set_scene("outdoor", "초원 한가운데", "Open savanna grassland.", ["키 큰 풀"])
+    game.add_lead("smoke", "멀리 피어오르는 연기")
+    calls = []
+
+    def fake_create(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            return SimpleNamespace(id="r1", output_text="", output=[
+                SimpleNamespace(type="function_call", name="go_to", call_id="a", arguments='{"target": "village"}'),
+                SimpleNamespace(type="function_call", name="follow_lead", call_id="b",
+                                arguments=json.dumps({"lead_id": game.leads[0]["id"]}))])
+        return SimpleNamespace(id="r2", output=[], output_text="당신은 초원의 **나무 그늘**에서 몸을 누인다.")
+
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=fake_create)))
+    start = (game.lat, game.lon)
+    game.scene_dirty = False
+    gamemaster.run_turn(game, "쉴 곳을 찾아 이동한다")
+    results = [json.loads(o["output"]) for o in calls[1]["input"]]
+    assert all("error" in r for r in results)                                    # 두 이동 모두 거절
+    assert (game.lat, game.lon) == start and game.place_type == "야생" and game.leads   # 그대로
+    assert game.scene_place == "초원 한가운데" and not game.scene_dirty            # 그림도 그대로
+
+
+def test_movement_allowed_when_player_says_so(game):
+    game.place_type = "야생"
+    game.begin_turn()
+    game.turn_flags["player_text"] = "가장 가까운 마을로 간다"
+    assert tools_module.player_asked_for(game, "go_to", {"target": "village"})
+    assert not tools_module.player_asked_for(game, "go_to", {"target": "city"})
+    lead = game.add_lead("engine", "멀리서 엔진 소리가 들린다.")
+    game.turn_flags["player_text"] = "엔진 소리 쪽으로 간다"
+    assert tools_module.player_asked_for(game, "follow_lead", {"lead_id": lead["id"]})
+    game.turn_flags["player_text"] = f"{lead['direction']}으로 걸어간다"
+    assert tools_module.player_asked_for(game, "follow_lead", {"lead_id": lead["id"]})
+    game.turn_flags["player_text"] = "물을 찾는다"
+    assert not tools_module.player_asked_for(game, "follow_lead", {"lead_id": lead["id"]})
+    game.turn_flags["player_text"] = "계속 간다"
+    assert tools_module.player_asked_for(game, "go_to", {"target": "continue"})
+
+
+def test_narration_is_fixed_when_it_ignores_the_new_place(game):
+    game.begin_turn()
+    game.set_scene("outdoor", "마을 입구", "Village entrance.", ["작은 집들", "우물"])
+    stale = "당신은 초원의 나무 그늘에서 쉰다.\n▶ 잔다\n▶ 물을 찾는다\n▶ 불을 피운다"
+    good = "당신은 마을 입구에 들어선다. 우물이 보인다.\n▶ 잔다\n▶ 물을 찾는다\n▶ 불을 피운다"
+    client = SimpleNamespace(responses=SimpleNamespace(create=lambda **k: SimpleNamespace(output_text=good)))
+    assert gamemaster.ensure_scene(client, stale, game) == good
+    assert gamemaster.ensure_scene(client, good, game) == good                    # 맞으면 그대로
+
+    broken = SimpleNamespace(responses=SimpleNamespace(create=lambda **k: SimpleNamespace(output_text=stale)))
+    assert gamemaster.ensure_scene(broken, stale, game).startswith("*📍 지금 위치: 마을 입구")   # 그래도 안 되면 표시
+
+    game.begin_turn()                                                            # 장소가 안 바뀐 턴은 검사하지 않는다
+    assert gamemaster.ensure_scene(broken, stale, game) == stale
+
+
+def test_location_bar_separates_terrain_and_place(game):
+    from survival.ui import render_location
+    game.place_type = "마을"
+    html = render_location(game)
+    assert "지형: " in html and "장소: 마을" in html
