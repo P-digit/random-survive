@@ -471,6 +471,72 @@ def ensure_scene(client, text, state):
     return f"*📍 지금 위치: {state.scene_place} ({state.place_type})*\n\n" + text
 
 
+VITAL_NAMES = {"health": "체력", "satiety": "포만감", "hydration": "수분", "energy": "기력"}
+VITAL_BANDS = {   # (하한, 몸 상태) — 높은 쪽부터
+    "health": [(70, "몸 상태가 괜찮다"), (40, "몸이 무겁고 아픈 곳이 있다"), (20, "심하게 다쳐 몸이 말을 듣지 않는다"),
+               (0, "생명이 위태롭다")],
+    "satiety": [(70, "배가 든든하다"), (40, "조금 출출하다"), (20, "몹시 배가 고프다"), (0, "굶주려 기운이 빠진다")],
+    "hydration": [(70, "목마르지 않다"), (40, "조금 목이 마르다"), (20, "갈증이 심하다"), (0, "탈수 직전이다")],
+    "energy": [(70, "기운이 있다"), (40, "조금 피곤하다"), (20, "몹시 지쳤다"), (0, "탈진 직전이다")],
+}
+STAT_NUMBER = re.compile(r"(체력|포만감|수분|기력)(?:은|는|이|가|도)?\s*(?:수치(?:가|는)?\s*)?(?:약\s*)?(\d{1,3})(?!\s*(?:%p|시간|분|km|도|°))")
+
+
+def vitals(state):
+    return {k: getattr(state, k) for k in VITAL_NAMES}
+
+
+def vital_band(stat, value):
+    for low, words in VITAL_BANDS[stat]:
+        if value >= low:
+            return words
+    return VITAL_BANDS[stat][-1][1]
+
+
+def ensure_vitals(client, text, state, seen):
+    """서술의 몸 상태를 오른쪽 수치(최종값)에 맞춘다.
+
+    GM은 툴 결과로 받은 수치를 보고 서술하지만, 그 뒤에 엔진이 시간 경과·먹은 것의 회복 보장 등으로 수치를
+    더 바꾼다. 서술이 바뀌기 전 값으로 쓰였으면 고친다.
+    """
+    if state.status != "playing" or not text:
+        return text
+    final = vitals(state)
+    names = {v: k for k, v in VITAL_NAMES.items()}
+    # 1) 서술에 적힌 숫자는 최종값으로 바로 바꾼다
+    text = STAT_NUMBER.sub(lambda m: m.group(0)[:m.start(2) - m.start(0)] + str(round(final[names[m.group(1)]]))
+                           + m.group(0)[m.end(2) - m.start(0):], text)
+    # 2) 엔진이 몸 상태 단계를 바꿨으면 서술의 묘사를 맞춘다
+    # (경계 근처에서 몇 점 흔들린 것은 서술과 어긋나지 않는다: 8 이상 바뀌어 단계가 달라졌거나 20 이상 바뀐 경우만)
+    changed = [k for k in VITAL_NAMES
+               if (abs(final[k] - seen[k]) >= 8 and vital_band(k, seen[k]) != vital_band(k, final[k]))
+               or abs(final[k] - seen[k]) >= 20]
+    if not changed:
+        return text
+    facts = "\n".join(
+        f"- {VITAL_NAMES[k]}: {round(seen[k])} → {round(final[k])} (지금: {vital_band(k, final[k])})" for k in changed)
+    others = ", ".join(f"{VITAL_NAMES[k]} {round(final[k])}({vital_band(k, final[k])})"
+                       for k in VITAL_NAMES if k not in changed)
+    try:
+        response = client.responses.create(
+            model=LLM_MODEL,
+            max_output_tokens=900,
+            instructions="다음 게임 서술을 고쳐라. 서술은 플레이어의 몸 상태가 바뀌기 전 값을 보고 쓰였다. 아래가 이번 "
+                         "턴이 끝난 뒤의 확정된 몸 상태다. 몸 상태(갈증·배고픔·피로·통증)를 말하는 부분만 이 상태에 "
+                         "맞게 고치고, 맞지 않는 묘사는 지운다. 나머지 사건·장소·인물·대사는 그대로 둔다. 수치를 "
+                         "나열하지 않는다. 한국어, 2인칭 현재형, **굵은 글씨**와 '▶'로 시작하는 줄의 형식은 그대로 "
+                         "둔다. 고친 글만 출력한다.\n[바뀐 몸 상태]\n" + facts + "\n[그대로인 몸 상태] " + others,
+            input=text,
+        )
+        fixed = (response.output_text or "").strip()
+        if fixed and fixed.count("▶") == text.count("▶"):
+            return STAT_NUMBER.sub(lambda m: m.group(0)[:m.start(2) - m.start(0)]
+                                   + str(round(final[names[m.group(1)]])) + m.group(0)[m.end(2) - m.start(0):], fixed)
+    except Exception as e:
+        print(f"[몸 상태] 서술 고치기 실패: {e}")
+    return text
+
+
 def collect_notices(state):
     """이번 턴에 일어난 중요한 일을 모은다. 대화창 맨 위에 눈에 띄는 알림으로 표시된다."""
     notices = []
@@ -680,6 +746,7 @@ def run_turn(state, player_text=None):
         state.prev_response_id = None
         response = first_call(None, make_recap(state))
 
+    seen = vitals(state)      # GM이 마지막으로 본 몸 상태 (입력·툴 결과에 담겨 전달된다)
     # LLM이 툴 호출을 요청하면: 실행 → 결과 전달 → 다시 응답 받기 를 반복한다
     for _ in range(MAX_TOOL_ROUNDS):
         tool_outputs = []
@@ -693,6 +760,7 @@ def run_turn(state, player_text=None):
                 })
         if not tool_outputs:
             break
+        seen = vitals(state)
         response = client.responses.create(
             model=LLM_MODEL,
             instructions=INSTRUCTIONS,
@@ -719,6 +787,7 @@ def run_turn(state, player_text=None):
     # 지명(현지 문자일 수 있음)은 그대로 두고, 서술에 섞인 다른 언어만 고친다
     text = ensure_korean(client, response.output_text or "", allowed=(state.place_name, state.scene_place))
     text = ensure_scene(client, text, state)
+    text = ensure_vitals(client, text, state, seen)
     body, suggestions = split_suggestions(text)
     if not body:
         body = "(잠시 정신이 아득해진다. 다시 행동을 정해 보자.)"
