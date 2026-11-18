@@ -1,6 +1,7 @@
 """위치 관련 기능: 랜덤 좌표 뽑기, 지명 찾기, 거리 계산, 한국 방향으로 이동."""
 import math
 import random
+import time
 
 import requests
 
@@ -99,12 +100,10 @@ def is_land(lat, lon):
         return None
 
 
-def reverse_geocode(lat, lon):
-    """좌표 → 지명. (OpenStreetMap Nominatim) 실패하면 None."""
-    params = {"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 8, "accept-language": "ko"}
+def _nominatim(lat, lon, lang):
+    params = {"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 8, "accept-language": lang}
     try:
-        response = requests.get(REVERSE_URL, params=params, headers=HEADERS, timeout=TIMEOUT)
-        data = response.json()
+        data = requests.get(REVERSE_URL, params=params, headers=HEADERS, timeout=TIMEOUT).json()
     except Exception:
         return None
     if "error" in data:
@@ -116,6 +115,22 @@ def reverse_geocode(lat, lon):
     name = ", ".join(x for x in [country, region] if x) or data.get("display_name", "")
     return {"country": country, "region": region, "name": name,
             "country_code": str(address.get("country_code", "")).lower()}
+
+
+def reverse_geocode(lat, lon):
+    """좌표 → 지명. (OpenStreetMap Nominatim) 실패하면 None.
+
+    화면에는 한국어 지명(name)을, 그림 지시문에는 영어 지명(name_en)을 쓴다. 그림 지시문에 한글이 섞이면
+    이미지 모델이 그림 속 표지판에 엉터리 한글을 그려 넣기 때문이다.
+    """
+    korean = _nominatim(lat, lon, "ko")
+    if korean is None:
+        return None
+    time.sleep(1.0)                      # Nominatim 이용 규칙: 초당 1회 이하
+    english = _nominatim(lat, lon, "en") or {}
+    korean["name_en"] = english.get("name", "")
+    korean["country_en"] = english.get("country", "")
+    return korean
 
 
 def pick_random_land():
