@@ -2040,3 +2040,32 @@ def test_river_water_is_not_taken_from_inventory(game, monkeypatch):
     gamemaster.run_turn(game, "개울물을 끓여 마신다")
     assert "물 1L" in game.items                                           # 가진 물은 그대로
     assert gamemaster.estimate_time("에너지바를 먹고 잔다") == (7.0, "sleep")   # 먹고 자면 잠이 우선
+
+
+# ---------- 21차 수정: 서술의 몸 상태 = 오른쪽 수치 ----------
+def test_narration_numbers_follow_final_vitals(game, monkeypatch):
+    desert_noon(game)
+    game.hydration = 50
+    calls = []
+    def create(**k):
+        calls.append(k)
+        if len(calls) == 1:
+            return SimpleNamespace(id="r", output=[], output_text="갈증이 심하다. 수분이 50까지 떨어졌다.")
+        return SimpleNamespace(id="x", output=[], output_text="물이 목을 적시자 갈증이 가신다. 수분이 50까지 올랐다.")
+    monkeypatch.setattr(gamemaster, "get_client", lambda: SimpleNamespace(responses=SimpleNamespace(create=create)))
+    body = gamemaster.run_turn(game, "가지고 있는 물을 마신다")
+    final = round(game.hydration)
+    assert final > 80 and f"수분이 {final}" in body and "수분이 50" not in body
+    assert "목마르지 않다" in calls[-1]["instructions"]          # 바뀐 몸 상태를 알려 주고 고치게 한다
+    assert "갈증이 가신다" in body
+
+
+def test_no_rewrite_when_band_unchanged(game, monkeypatch):
+    calls = []
+    def create(**k):
+        calls.append(k)
+        return SimpleNamespace(id="r", output=[], output_text="당신은 주변을 둘러본다. 체력 99")
+    monkeypatch.setattr(gamemaster, "get_client", lambda: SimpleNamespace(responses=SimpleNamespace(create=create)))
+    game.health = 90
+    body = gamemaster.run_turn(game, "주변을 둘러본다")
+    assert len(calls) == 1 and f"체력 {round(game.health)}" in body
