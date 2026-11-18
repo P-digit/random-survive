@@ -101,7 +101,7 @@ def draw_scene(state):
         if path:
             state.image_path = path
             # 실제로 그려진 것을 읽어 두었다가 다음 턴에 게임 마스터에게 알려 준다 (그림과 서술의 일치)
-            state.scene_seen = imagegen.describe_image(get_client(), path)
+            state.scene_seen, state.scene_seen_en = imagegen.read_image(get_client(), path)
     state.scene_dirty = False
     state.moved_since_image = 0.0
     state.image_scene = scene_key(state)
