@@ -120,6 +120,8 @@ TOOLS = [
             "success_money": {"type": "number",
                               "description": "성공하면 얻는 돈(USD). 지갑·금고를 훔치거나 협박해 받는 돈 등. 그 지역 형편에 "
                                              "맞는 구체적인 금액(최대 600). 돈과 무관하면 0. 성공하면 엔진이 바로 넣는다"},
+            "victim": {"type": "string",
+                       "description": "범죄의 피해자(이름이나 역할, 예: '트럭 기사'). 피해자가 없거나 범죄가 아니면 빈 문자열"},
             "success_items": {"type": "array", "items": {"type": "string"},
                               "description": "성공하면 얻는 들고 다닐 수 있는 물건들. 없으면 빈 배열. 탈것은 넣지 말고 "
                                              "acquire_vehicle 로"},
@@ -283,6 +285,9 @@ GO_WORDS = {
     "continue": ("계속 간다", "계속 가", "계속 걷", "이어서 간다", "이어 간다", "이어간다", "가던 길", "마저 간다",
                  "다시 출발", "출발한다", "출발하자"),
 }
+# 탈것을 '갖겠다'는 말 (태워 달라는 것과 구별). 범죄로 빼앗는 경우는 범죄 의도로 따로 판정한다
+OWN_WORDS = ("산다", "사겠", "사자", "살게", "구입", "구매", "빌린", "빌려", "빌리", "렌트", "임대", "대여", "넘겨받",
+             "물려받", "가져간", "가져가", "차지")
 # 단서가 하나뿐일 때 '그쪽으로 간다'처럼 가리키는 말
 POINTING_WORDS = ("그쪽", "저쪽", "그곳", "저곳", "거기", "저기", "소리나는", "소리가나는", "연기나는", "불빛이보이는")
 COMPASS = ("북쪽", "북동쪽", "동쪽", "남동쪽", "남쪽", "남서쪽", "서쪽", "북서쪽")
@@ -357,6 +362,17 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
+        elif name == "attempt_action" and str(args.get("crime", "none")) != "none" \
+                and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none":
+            result = {"error": "플레이어는 범죄를 의도하지 않았다. 이 행동을 범죄로 처리하지 마라. 합법적인 방법으로 "
+                               "해석하라: 태워 달라고 부탁하기, 요금·품삯 흥정, 물건값 지불, 일을 돕고 대가 받기 등. "
+                               "결과가 불확실하면 crime='none' 으로 다시 판정하라."}
+        elif name == "acquire_vehicle" and state.turn_flags.get("player_text") \
+                and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none" \
+                and not any(w in state.turn_flags["player_text"].replace(" ", "") for w in OWN_WORDS):
+            result = {"success": False,
+                      "error": "플레이어는 탈것을 갖겠다고 하지 않았다(빼앗기·사기·빌리기 아님). 태워 달라는 것이면 "
+                               "accept_offer(기회가 있을 때)나 travel(method='hitchhike') 로 처리하라."}
         elif name in ("go_to", "follow_lead", "travel", "accept_offer") and not player_asked_for(state, name, args):
             result = {"error": "플레이어는 그곳으로 가겠다고 하지 않았다. 이동 툴을 쓰지 말고, 지금 있는 자리와 그 근처에서 "
                                "행동을 처리하라(쉴 곳·물·먹을 것을 주변에서 찾기 → advance_time, 찾은 곳으로 옮기면 "
@@ -371,7 +387,7 @@ def execute_tool(state, name, arguments, client=None):
                                    str(args.get("crime", "none")), str(args.get("witnessed", "none")),
                                    bool(args.get("violent")), str(args.get("item", "")),
                                    bool(args.get("stealth")), float(args.get("success_money", 0) or 0),
-                                   list(args.get("success_items") or []))
+                                   list(args.get("success_items") or []), str(args.get("victim", "")))
         elif name == "add_lead":
             lead = state.add_lead(args.get("kind"), str(args.get("clue", "")))
             result = ({"ok": True, "단서": f"{lead['id']} {lead['label']} — {lead['direction']}, 약 {lead['km']}km "
