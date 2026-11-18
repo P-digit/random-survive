@@ -994,7 +994,7 @@ class GameState:
                                             or geo.haversine_km(self.lat, self.lon, d["lat"], d["lon"]) < km)
                    for d in self.done_offers)
 
-    def closed_offers_here(self, turns=6, km=3):
+    def closed_offers_here(self, turns=6, km=5):
         """지금 이 자리에서(또는 방금) 끝난 기회들. GM에게 '다시 할 수 없다'고 알린다."""
         return [d for d in self.done_offers
                 if self.turn - d["turn"] <= turns or geo.haversine_km(self.lat, self.lon, d["lat"], d["lon"]) < km]
@@ -1005,7 +1005,7 @@ class GameState:
         note = accepted_note if how == "accepted" else declined_note
         self.done_offers = (self.done_offers + [{"id": offer.get("id"), "accept": offer.get("accept", ""), "how": how,
                                                  "turn": self.turn, "lat": self.lat, "lon": self.lon,
-                                                 "note": note}])[-10:]
+                                                 "note": note, "items": list(offer.get("items") or [])}])[-10:]
         self.remember(note)
         return note
 
