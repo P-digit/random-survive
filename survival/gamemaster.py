@@ -2,7 +2,7 @@
 import json
 import re
 
-from .config import LLM_MODEL, MAX_TOOL_ROUNDS, OPENAI_API_KEY
+from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT, OPENAI_API_KEY
 from .state import item_core
 from .tools import TOOLS, execute_tool
 
@@ -28,6 +28,11 @@ INSTRUCTIONS = """
 - 나중에 다시 나올 약속·인물·장소·상태는 remember 로 기록한다.
 - 결과는 그 장소와 시간에 맞아야 한다. 밤에 도착한 마을은 대부분 잠들어 있고, 사막의 연기는 유목민 천막,
   숲의 엔진 소리는 임도나 벌목장일 가능성이 크다. 엔진이 돌려준 사실은 이런 점을 이미 반영한 것이다.
+
+[초반 제한]
+- [현재 상태]의 '초반_제한'이 있으면 아직 도시·공항·공관으로 갈 수 없다. 낙하 지점 근처(야생과 마을)에서
+  물·식량·쉘터를 마련하고, 사람을 만나고, 여비를 모으는 시기다. 추천 행동도 그 범위에서 제시한다.
+  엔진이 이동을 거절하면 그 이유를 자연스럽게 서술한다.
 
 [귀환으로 이어지는 길 - 끌지 않는다]
 - 플레이어가 목적지를 정해 가려 하면 go_to 를 호출한다: 가장 가까운 마을(village), 도시(city),
@@ -137,6 +142,15 @@ INSTRUCTIONS = """
 - 입장권, 숙박권, 쿠폰, 열쇠 대여처럼 특정 행위를 위해 가진 물건은 그 행위를 마치면 사라진다
   (update_inventory 의 remove). 교통편 표는 탑승하면 엔진이 자동으로 없앤다.
 - 플레이어가 가지고 있지 않은 물건은 쓸 수 없다.
+
+[결과는 반드시 반영한다 - 매우 중요]
+- 플레이어의 행동으로 생긴 이득과 손해는 서술만 하고 끝내지 않는다. 반드시 툴로 반영한다.
+  * 훔치기·협박·사기처럼 성공이 불확실한 행동: attempt_action 의 success_money / success_items 에 얻게 될
+    돈과 물건을 미리 적는다. 성공하면 엔진이 바로 넣는다. "몇 백 달러"처럼 흐리지 말고 구체적인 금액을 정한다.
+  * 일해서 번 돈, 받은 돈, 주운 돈: update_status 의 money 에 +금액.
+  * 도둑맞거나 빼앗긴 돈, 벌금: update_status 의 money 에 -금액.
+  * 얻은 물건은 update_inventory, 탈것은 acquire_vehicle (탈것은 절대 소지품에 넣지 않는다).
+- 서술에 나온 금액·물건과 툴로 반영한 금액·물건이 같아야 한다.
 
 [돈 규칙]
 - 돈을 쓰는 모든 순간(구매, 숙박, 식사, 뇌물, 택시·나룻배 삯, 수수료)에 pay 를 호출한다. 서술로만 "돈을
@@ -258,6 +272,33 @@ def build_input(state, player_text, recap=None):
 
 PAYMENT = re.compile(r"\$\s?(\d+(?:\.\d+)?)[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)"
                      r"|(\d+(?:\.\d+)?)\s?달러[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)")
+
+
+INCOME = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)[^\n.]{0,25}?(손에 넣|얻었|얻어|챙겼|챙겨|벌었|벌어|받았|받아|훔쳤|훔쳐|주웠|주워)"
+                    r"|(\d[\d,]*)\s?달러[^\n.]{0,25}?(손에 넣|얻었|얻어|챙겼|챙겨|벌었|벌어|받았|받아|훔쳤|훔쳐|주웠|주워)")
+LOSS = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)[^\n.]{0,25}?(잃었|잃고|빼앗겼|빼앗기|뺏겼|도둑맞|털렸|날렸|벌금)"
+                  r"|(\d[\d,]*)\s?달러[^\n.]{0,25}?(잃었|잃고|빼앗겼|빼앗기|뺏겼|도둑맞|털렸|날렸|벌금)")
+
+
+def auto_money(state, narration):
+    """게임 마스터가 돈을 얻거나 잃었다고 서술했는데 이번 턴에 돈이 전혀 변하지 않았다면, 서술된 금액을 반영한다."""
+    if state.money != state._snapshot.get("money", state.money) or state.turn_flags.get("paid") \
+            or state.turn_flags.get("earned"):
+        return 0.0
+    text = narration or ""
+    loss = LOSS.search(text)
+    if loss:
+        amount = min(float((loss.group(1) or loss.group(3)).replace(",", "")), state.money)
+        state.money = round(state.money - amount, 2)
+        state.turn_flags["paid"] = amount
+        return -amount
+    gain = INCOME.search(text)
+    if gain:
+        amount = min(float((gain.group(1) or gain.group(3)).replace(",", "")), MONEY_GAIN_LIMIT)
+        state.money = round(state.money + amount, 2)
+        state.turn_flags["earned"] = amount
+        return amount
+    return 0.0
 
 
 def auto_charge(state, narration):
@@ -507,6 +548,7 @@ def run_turn(state, player_text=None):
     state.prev_response_id = response.id
     auto_consume(state, player_text)
     auto_charge(state, response.output_text)
+    auto_money(state, response.output_text)
     if player_text is None:
         state.end_turn(default_hours=0)            # 시작 턴은 시간이 흐르지 않는다
     else:
