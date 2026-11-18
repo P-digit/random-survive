@@ -892,3 +892,43 @@ def test_positive_events_everywhere():
                             assert len(lucky) >= 3, (place, biome, c)
     texts = [e["text"] for e in events_module.EVENTS]
     assert len(texts) == len(set(texts))                             # 중복 이벤트 없음
+
+
+
+# ---------- 9차 수정: 한국어 서술 ----------
+def test_foreign_script_is_detected_and_removed():
+    assert gamemaster.has_foreign("당신은 सोच 깊이 생각한다.")
+    assert gamemaster.has_foreign("상인이 «Привет» 하고 인사한다")
+    assert not gamemaster.has_foreign("**버려진 오두막**에서 $5를 내고 12km를 걷는다. 기온 -3°C.")
+    assert not gamemaster.has_foreign("Rajasthan의 사막", allowed=())                 # 영문은 허용
+    assert not gamemaster.has_foreign("인도, राजस्थान 에 도착했다", allowed=("인도, राजस्थान",))   # 지명은 허용
+    assert gamemaster.strip_foreign("당신은 सोच 깊이 생각한다.") == "당신은 깊이 생각한다."
+    assert gamemaster.strip_foreign("노인이 (नमस्ते) 하고 웃는다") == "노인이 하고 웃는다"
+    assert gamemaster.strip_foreign("인도, राजस्थान 에서 सोच", allowed=("인도, राजस्थान",)) == "인도, राजस्थान 에서"
+
+
+def test_ensure_korean_rewrites_or_strips():
+    calls = []
+
+    def ok(**kw):
+        calls.append(kw)
+        return SimpleNamespace(output_text="당신은 잠시 생각에 잠긴다.\n▶ 물을 찾는다")
+
+    client = SimpleNamespace(responses=SimpleNamespace(create=ok))
+    clean = "당신은 잠시 생각에 잠긴다.\n▶ 물을 찾는다"
+    assert gamemaster.ensure_korean(client, clean) == clean and calls == []          # 깨끗하면 호출하지 않음
+    assert gamemaster.ensure_korean(client, "당신은 सोच 잠긴다.\n▶ 물을 찾는다") == clean and len(calls) == 1
+
+    def bad(**kw):
+        return SimpleNamespace(output_text="당신은 सोच 잠긴다.\n▶ 물을 찾는다")
+
+    client = SimpleNamespace(responses=SimpleNamespace(create=bad))                  # 다시 써도 남으면 지운다
+    assert gamemaster.ensure_korean(client, "당신은 सोच 잠긴다.\n▶ 물을 찾는다") == "당신은 잠긴다.\n▶ 물을 찾는다"
+
+
+def test_turn_output_is_korean(game, monkeypatch):
+    replies = iter([SimpleNamespace(id="r", output=[], output_text="당신은 सोच 길을 찾는다.\n▶ 걷는다\n▶ 쉰다\n▶ 먹는다"),
+                    SimpleNamespace(output_text="당신은 곰곰이 길을 찾는다.\n▶ 걷는다\n▶ 쉰다\n▶ 먹는다")])
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=lambda **k: next(replies))))
+    assert gamemaster.run_turn(game, "길을 찾는다") == "당신은 곰곰이 길을 찾는다."

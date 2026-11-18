@@ -12,7 +12,7 @@ INSTRUCTIONS = """
 
 [진행 규칙]
 - 매 턴 [현재 상태]와 [플레이어 행동]이 주어진다. 위치·날씨·기후·지형은 실제 데이터이므로 그 지역의
-  기후, 자연, 문화, 언어에 어울리게 현실적으로 서술한다.
+  기후, 자연, 문화에 어울리게 현실적으로 서술한다.
 - '기후'는 그 땅의 1년 기록으로 판별한 것이다. 식생, 땅의 상태, 물을 구할 수 있는 정도, 현지인의 옷차림과
   집의 모양, 지금 계절(우기/건기 포함)에 따른 풍경을 기후에 맞춘다. 사막 기후에 울창한 숲이나 개울이
   나오거나, 열대우림에 눈이 쌓이는 식의 서술은 금지한다. '날씨'는 지금 이 순간의 하늘이다.
@@ -120,6 +120,12 @@ INSTRUCTIONS = """
   그런 곳에서는 물·식량·사람을 찾는 일도 쉽게 성공하지 않는다.
 - 툴 결과에 game_over 가 있으면 결말(사망 또는 귀환 성공)을 인상 깊게 서술하고 끝낸다.
 
+[언어 - 매우 중요]
+- 서술과 추천 행동은 처음부터 끝까지 한국어로만 쓴다. 현지 언어(힌디어, 아랍어, 러시아어, 중국어 등)의
+  문자를 절대 섞지 않는다. 현지인의 말도 한국어로 옮겨 쓴다.
+- 현지 말을 꼭 살리고 싶으면 한글로 소리를 적고 뜻을 붙인다. 예: "나마스테(안녕하세요)".
+- 숫자, 단위(km, °C), 달러 표시($)는 그대로 쓴다.
+
 [출력 형식]
 - 한국어, 2인칭 현재형("당신은 ~한다"), 3~6문장의 몰입감 있는 서술. 수치를 나열하지 않는다.
 - 플레이어가 놓치면 안 되는 핵심 구절은 **굵게** 표시한다. 한 응답에 2~4곳, 문장 전체가 아니라
@@ -213,6 +219,58 @@ def auto_charge(state, narration):
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
     return amount
+
+
+# 한글·영문·숫자·문장부호가 아닌 문자(데바나가리, 아랍, 키릴, 태국, 한자·가나 등)
+FOREIGN = re.compile(
+    "[\u0370-\u03FF\u0400-\u052F\u0530-\u058F\u0590-\u05FF\u0600-\u06FF\u0700-\u08FF"
+    "\u0900-\u0DFF\u0E00-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u10A0-\u10FF\u1200-\u139F"
+    "\u1780-\u17FF\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+")
+
+
+def has_foreign(text, allowed=()):
+    """지명처럼 허용된 문자열을 빼고, 다른 언어 문자가 섞였는지."""
+    for word in allowed:
+        if word:
+            text = text.replace(word, "")
+    return bool(FOREIGN.search(text or ""))
+
+
+def strip_foreign(text, allowed=()):
+    """다른 언어 문자를 지운다. 지운 자리에 남는 빈 괄호·따옴표와 겹친 공백도 정리한다."""
+    keep = {f"\x00{i}\x00": word for i, word in enumerate(w for w in allowed if w)}
+    for marker, word in keep.items():
+        text = text.replace(word, marker)
+    text = FOREIGN.sub("", text)
+    text = re.sub(r"\(\s*\)|“\s*”|\"\s*\"|'\s*'", "", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r" +([,.!?])", r"\1", text)
+    text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
+    for marker, word in keep.items():
+        text = text.replace(marker, word)
+    return text
+
+
+def ensure_korean(client, text, allowed=()):
+    """서술에 다른 언어 문자가 섞였으면 한국어로 다시 쓰게 하고, 그래도 남으면 지운다."""
+    if not has_foreign(text, allowed):
+        return text
+    try:
+        response = client.responses.create(
+            model=LLM_MODEL,
+            max_output_tokens=900,
+            instructions="다음 게임 서술에서 한국어가 아닌 문자(힌디어, 아랍어, 러시아어, 중국어 등)를 모두 "
+                         "자연스러운 한국어로 바꿔라. 나머지 내용, 문장, **굵은 글씨**, '▶' 로 시작하는 줄은 "
+                         "그대로 둔다. 바꾼 글만 출력한다.",
+            input=text,
+        )
+        rewritten = (response.output_text or "").strip()
+        if rewritten and not has_foreign(rewritten, allowed) and rewritten.count("▶") == text.count("▶"):
+            return rewritten
+        text = rewritten or text
+    except Exception as e:
+        print(f"[언어] 다시 쓰기 실패: {e}")
+    return strip_foreign(text, allowed)
 
 
 def collect_notices(state):
@@ -389,7 +447,9 @@ def run_turn(state, player_text=None):
         state.end_turn(*estimate_time(player_text))
 
     state.notices = collect_notices(state)
-    body, suggestions = split_suggestions(response.output_text or "")
+    # 지명(현지 문자일 수 있음)은 그대로 두고, 서술에 섞인 다른 언어만 고친다
+    text = ensure_korean(client, response.output_text or "", allowed=(state.place_name, state.scene_place))
+    body, suggestions = split_suggestions(text)
     if not body:
         body = "(잠시 정신이 아득해진다. 다시 행동을 정해 보자.)"
     if state.status == "playing":
