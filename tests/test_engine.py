@@ -2166,3 +2166,42 @@ def test_gm_decline_tool_and_new_offer_not_declined(game, monkeypatch):
     assert out["ok"] and game.offer is None
     from survival.events import DECLINE_WORDS                # 거절이 아닌 말에 걸리지 않는다
     assert not any(w.replace(" ", "") in "안타깝다가방안가득" for w in DECLINE_WORDS)
+
+
+def test_engine_opens_crate_once_even_if_gm_skips_the_tool(game, monkeypatch):
+    supply_offer(game)
+    game.turn += 1                                        # 기회는 지난 턴에 나왔다
+    game.offer["turn"] = game.turn
+    monkeypatch.setattr(game, "begin_turn", lambda: (setattr(game, "turn", game.turn + 1),
+                                                     setattr(game, "turn_flags", {}),
+                                                     setattr(game, "time_passed_this_turn", False),
+                                                     setattr(game, "_snapshot", game._tracked())))
+    # 1) GM이 accept_offer 없이 서술만 해도 엔진이 받아들여 한 번 얻는다
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text="당신은 상자를 연다."))
+    gamemaster.run_turn(game, "보급 상자를 연다")
+    assert game.items.count("생수 2병") == 1 and game.done_offers[-1]["how"] == "accepted"
+    assert any("기회를 잡았다" in n["title"] for n in game.notices)
+    items = list(game.items)
+    # 2) 다시 연다: GM이 물건을 또 주려 해도, 서술로 꺼냈다고 해도 막힌다
+    give = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_inventory", call_id="a", arguments=json.dumps(
+            {"add": [{"name": "비상식량 2개", "carryable": True}], "remove": [], "source": "found", "giver": ""})),
+        SimpleNamespace(type="function_call", name="accept_offer", call_id="b", arguments="{}")])
+    reply_with(monkeypatch, give,
+               SimpleNamespace(id="r2", output=[], output_text="상자를 뒤지자 비상식량 2개가 나왔다. 당신은 그것을 챙긴다."))
+    body = gamemaster.run_turn(game, "보급 상자를 다시 연다")
+    assert game.items == items
+    assert "텅 비어" in body and "나왔다" not in body
+    assert any("이미 끝난 일" in n["title"] for n in game.notices)
+
+
+def test_gm_accept_call_after_engine_accept_is_not_double(game, monkeypatch):
+    supply_offer(game)
+    game.turn += 1
+    call_accept = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="accept_offer", call_id="a", arguments="{}")])
+    reply_with(monkeypatch, call_accept, SimpleNamespace(id="r2", output=[], output_text="상자를 연다."))
+    gamemaster.run_turn(game, "보급 상자를 연다")
+    assert game.items.count("생수 2병") == 1 and len(game.done_offers) == 1
+    assert gamemaster.enforce_redo("상자 안에는 아무것도 들어 있지 않다.", {"kind": "redo", "message": "x",
+                                                                       "items": []}) == "상자 안에는 아무것도 들어 있지 않다."

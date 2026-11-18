@@ -375,6 +375,33 @@ def redone_offer(state):
     return None
 
 
+# 끝난 기회를 '다시 하는' 행동 (수락 행동 외에 뒤지기·꺼내기 등)
+REDO_ACTIONS = _pattern(("뒤지", "뒤져", "뒤진", "꺼내", "꺼낸", "챙기", "챙긴", "살펴", "살핀", "확인", "열어", "연다",
+                         "열고", "열겠", "열자", "찾아", "찾는", "털어", "턴다"))
+
+
+def offer_action(state):
+    """플레이어의 이번 행동이 기회를 받아들이는 것인지, 이미 끝난 기회를 다시 하려는 것인지 엔진이 먼저 판정한다.
+
+    GM이 accept_offer 대신 물건·수치를 직접 주거나, 끝난 일을 다시 해 주는 것을 막기 위해서다.
+    반환: ("accept", None) / ("redo", 끝난 기회 기록) / (None, None)
+    """
+    from .events import DECLINE_WORDS
+    text = (state.turn_flags.get("player_text") or "").replace(" ", "")
+    if not text:
+        return None, None
+    declining = any(w.replace(" ", "") in text for w in DECLINE_WORDS)
+    offer = state.offer
+    if offer and offer.get("turn", state.turn) < state.turn and not declining \
+            and state.turn_flags.get("crime_intent", ("none", ""))[0] == "none" \
+            and player_asked_for(state, "accept_offer", {}):
+        return "accept", None
+    done = redone_offer(state)
+    if done and (ACCEPT_ACTIONS.search(text) or REDO_ACTIONS.search(text) or any(w in text for w in ACCEPT_WORDS)):
+        return "redo", done
+    return None, None
+
+
 def redo_problem(state, name, args):
     """끝난 기회를 다시 하며 물건·회복·돈을 다시 얻으려 하면 막는다. 문제가 없으면 None."""
     done = redone_offer(state)
@@ -485,6 +512,9 @@ def execute_tool(state, name, arguments, client=None):
             result = state.arrest(str(args.get("reason", "")))
         elif name == "buy_ticket":
             result = state.buy_ticket(args.get("method"), args.get("distance_km", 1))
+        elif name == "accept_offer" and (state.turn_flags.get("pre_offer") or {}).get("kind") == "accept":
+            result = {"success": True, "이미_처리됨": True, "message": state.turn_flags["pre_offer"]["message"],
+                      "안내": "엔진이 이번 턴에 이미 받아들였다. 이 결과를 그대로 서술하라."}
         elif name == "accept_offer":
             result = state.accept_offer()
         elif name == "decline_offer":

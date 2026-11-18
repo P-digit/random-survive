@@ -320,6 +320,15 @@ def build_input(state, player_text, recap=None):
                        "것으로 해석해도 된다.",
             "none": "범죄 의도가 없다. 모호한 행동은 합법적인 방법(부탁, 흥정, 요금 지불, 일 돕기)으로 해석한다. "
                     "범죄로 바꾸지 않는다(엔진이 거절한다)."}[kind]]
+        pre = state.turn_flags.get("pre_offer") or {}
+        if pre.get("kind") == "accept":
+            parts += ["[기회를 받아들인 결과 - 엔진이 이미 처리했다]", pre["message"],
+                      "시간·수치·소지품·이동은 이미 반영되었다. accept_offer 나 다른 툴로 같은 것을 다시 주지 말고, "
+                      "이 결과를 그대로 서술한다."]
+        elif pre.get("kind") == "redo":
+            parts += ["[이번 행동은 이미 끝난 일이다 - 엔진 판정]",
+                      f"{pre['message']} 플레이어는 이것을 다시 하려 했지만 얻는 것은 없다. 끝났다는 것(빈 상자 등)을 "
+                      "확인하는 장면만 짧게 서술한다. 물건·수치·돈을 주지 않는다."]
         parts += [f"[플레이어가 이번 턴에 시도하는 행동 - 턴 {state.turn}]",
                   player_text,
                   "(위 행동 하나만 판정한다. 이것은 시도일 뿐이며, 물건·인물의 존재와 성공 여부는 "
@@ -557,6 +566,9 @@ def collect_notices(state):
         notices.append({"kind": "bad" if result["bad"] else "good",
                         "title": ("❌ 선택의 대가 — " if result["bad"] else "✅ 기회를 잡았다 — ") + result["title"],
                         "text": result["text"]})
+    pre = flags.get("pre_offer") or {}
+    if pre.get("kind") == "redo":
+        notices.append({"kind": "info", "title": f"🔒 이미 끝난 일 — {pre['accept']}", "text": pre["message"]})
     declined = flags.get("offer_declined")
     if declined:
         notices.append({"kind": "info", "title": f"🚫 기회를 거절했다 — {declined['accept']}", "text": declined["text"]})
@@ -616,6 +628,38 @@ def collect_notices(state):
                         "text": f"{o['text']}\n▲ 잘 풀리면: {o['detail']}\n⚠ {o.get('risk', '')}\n"
                                 f"다음 턴까지만 유효 → “{o['accept']}”"})
     return notices
+
+
+def resolve_offer_action(state):
+    """GM을 부르기 전에 엔진이 기회의 수락·되풀이를 판정해 확정한다. (GM이 직접 물건을 주는 길을 막는다)"""
+    from .tools import offer_action
+    kind, done = offer_action(state)
+    pre = None
+    if kind == "accept":
+        result = state.accept_offer()
+        if result.get("success"):
+            pre = {"kind": "accept", "message": result["message"]}
+    elif kind == "redo":
+        pre = {"kind": "redo", "message": done["note"], "accept": done["accept"], "items": done.get("items", [])}
+    state.turn_flags["pre_offer"] = pre
+    return pre
+
+
+GAIN_VERBS = re.compile(r"꺼내|꺼낸|꺼냈|얻었|얻는다|얻어|찾아냈|찾았|찾아낸|챙겼|챙긴|챙긴다|발견|들어 있|들어있|나왔|나온다|손에 넣")
+
+
+def enforce_redo(body, pre):
+    """끝난 기회를 다시 했는데 서술이 물건을 또 얻은 것처럼 쓰였으면, 엔진의 판정으로 바꾼다."""
+    if not pre or pre.get("kind") != "redo":
+        return body
+    cores = [item_core(i) for i in pre.get("items", []) if item_core(i)]
+    sentences = re.split(r"(?<=[.!?。])\s+", body)
+    bad = [s for s in sentences if GAIN_VERBS.search(s) and (any(c in s for c in cores) or "상자" in s)
+           and not re.search(r"없|않|비어|빈 ", s)]
+    if not bad:
+        return body
+    kept = [s for s in sentences if s not in bad]
+    return (pre["message"] + " 아무리 뒤져도 더 나올 것이 없다. " + " ".join(kept)).strip()
 
 
 def auto_decline(state, player_text):
@@ -750,6 +794,7 @@ def run_turn(state, player_text=None):
         state.recent_inputs = (state.recent_inputs + [player_text])[-3:]
     if player_text is None:
         state.event = None   # 시작 턴에는 돌발 이벤트 없음
+    resolve_offer_action(state)
     def first_call(previous_id, recap=None):
         return client.responses.create(
             model=LLM_MODEL,
@@ -813,6 +858,7 @@ def run_turn(state, player_text=None):
     text = ensure_scene(client, text, state)
     text = ensure_vitals(client, text, state, seen)
     body, suggestions = split_suggestions(text)
+    body = enforce_redo(body, state.turn_flags.get("pre_offer"))
     if not body:
         body = "(잠시 정신이 아득해진다. 다시 행동을 정해 보자.)"
     if state.status == "playing":
