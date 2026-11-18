@@ -68,6 +68,9 @@ def _build_prompt(state):
     if state.place_type == "야생" and not state.indoor:
         only_line = ("Do NOT draw any building, hut, house, road, vehicle, fence or other man-made structure "
                      "unless it is described above. ")
+        if state.is_night or state.hour >= 17 or state.hour < 7:
+            only_line += ("Show evening or night only with the sky and natural light; do not add lit windows, "
+                          "lamps, campfires or houses that are not described above. ")
     else:
         only_line = "Do not add prominent landmarks or vehicles that are not described above. "
 
@@ -135,7 +138,38 @@ def light_of(state):
     return "at night, dark sky, only faint natural or artificial light"
 
 
-def build_edit_prompt(state):
+# Vision이 읽어 낸 대상 중 '사람이 만든 구조물'로 보는 말. 장면에 없던 것이 그림에 생겼는지 확인할 때 쓴다
+STRUCTURE_WORDS = ("집", "주택", "건물", "오두막", "통나무", "헛간", "농가", "창고", "천막", "텐트", "움막", "막사", "캐빈",
+                   "마을", "가로등", "전봇대", "전신주", "송전탑", "철탑", "탑", "다리", "울타리", "담장", "도로", "포장",
+                   "차", "트럭", "자동차", "교회", "사원", "성당", "모스크", "공장", "가게", "상점", "정자", "컨테이너",
+                   "창문", "불빛", "등불", "램프", "조명", "간판", "표지판", "벽", "지붕", "굴뚝")
+NO_ADDITIONS = ("Do not add any building, house, cabin, hut, tent, wall, fence, road, street lamp, lit window, "
+                "lantern, vehicle or person that is not already in the picture. Night is shown only by darker sky, "
+                "moonlight and stars, not by adding lights or houses. ")
+
+
+def _similar(a, b):
+    """같은 대상을 가리키는지: 한쪽이 다른 쪽을 포함하거나, 두 글자 이상 낱말을 함께 쓴다('버려진 오두막' ≈ '통나무 오두막')."""
+    flat_a, flat_b = a.replace(" ", ""), b.replace(" ", "")
+    if flat_a in flat_b or flat_b in flat_a:
+        return True
+    return bool({w for w in a.split() if len(w) >= 2} & {w for w in b.split() if len(w) >= 2})
+
+
+def added_structures(known, seen):
+    """그림에서 읽어 낸 것(seen) 중, 장면에 원래 있던 것(known)과 겹치지 않는 사람이 만든 구조물."""
+    known = [k for k in known if k]
+    added = []
+    for item in seen:
+        if not any(w in item for w in STRUCTURE_WORDS):
+            continue
+        if any(_similar(item, k) or _similar(k, item) for k in known):
+            continue
+        added.append(item)
+    return added
+
+
+def build_edit_prompt(state, strict=False):
     """같은 장면에서 시간·날씨만 바뀌었을 때, 이전 그림을 고치는 지시문."""
     w = state.weather
     category = weather_category(w.get("code", 0))
@@ -145,10 +179,12 @@ def build_edit_prompt(state):
                   f"outside the windows: {visuals}")
     else:
         change = f"Change only the lighting and sky to: {light_of(state)}. Weather: {visuals}"
+    strict_line = ("STRICT: the previous attempt wrongly added a building or lights. Change ONLY the colors and "
+                   "brightness of the existing pixels; every shape must stay identical. " if strict else "")
     return no_hangul("Edit this image. It is the same place a few hours later. Keep the exact same camera angle, "
                      "composition, landscape, buildings, room layout, furniture, objects, signs and every person "
-                     "exactly as they are; do not add, remove or replace anything. " + change + " "
-                     + sign_rule(state.country_code, state.country_en) + "No captions, no watermark.")
+                     "exactly as they are; do not add, remove or replace anything. " + NO_ADDITIONS + strict_line
+                     + change + " " + sign_rule(state.country_code, state.country_en) + "No captions, no watermark.")
 
 
 def _save(b64):
@@ -160,14 +196,39 @@ def _save(b64):
     return str(path)
 
 
-def edit_scene(client, state, previous_path):
+def known_things(state):
+    """지금 장면에 원래 있는 것들 (GM이 밝힌 것 + 이전 그림에서 읽어 낸 것 + 장면 이름)."""
+    return list(state.scene_features) + list(state.scene_seen) + [state.scene_place]
+
+
+def checked_edit(client, state, previous_path):
+    """빛·날씨만 바꾼 그림을 만들고, 장면에 없던 건물·구조물이 생기지 않았는지 Vision으로 확인한다.
+
+    생겼으면 더 엄격하게 한 번 더 고치고, 그래도 생기면 편집본을 버린다(이전 그림 유지).
+    반환: (그림 경로, 그 그림에서 읽어 낸 것들) 또는 (None, None)
+    """
+    known = known_things(state)
+    for strict in (False, True):
+        path = edit_scene(client, state, previous_path, strict=strict)
+        if not path:
+            return None, None
+        seen = describe_image(client, path)
+        extra = added_structures(known, seen)
+        if not extra:
+            return path, seen
+        print(f"[이미지] 편집이 장면에 없던 것을 그렸습니다({', '.join(extra)}). "
+              + ("더 엄격하게 다시 고칩니다." if not strict else "편집본을 버리고 이전 그림을 유지합니다."))
+    return None, None
+
+
+def edit_scene(client, state, previous_path, strict=False):
     """같은 장면을 유지한 채 빛·날씨만 바꾼 그림을 만든다 (Images API edit). 실패하면 None."""
     try:
         with open(previous_path, "rb") as image:
             result = client.images.edit(
                 model=IMAGE_MODEL,
                 image=image,
-                prompt=build_edit_prompt(state),
+                prompt=build_edit_prompt(state, strict=strict),
                 size="1536x1024",
                 quality="low",
             )
