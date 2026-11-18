@@ -269,7 +269,7 @@ def render_hud(state):
                      f'<div class="what">{escape(o["text"])}</div>'
                      f'<div class="gain">▲ 잘 풀리면: {escape(o["detail"])}</div>'
                      + (f'<div class="warn">⚠ {escape(o["risk"])}</div>' if o.get("risk") else "")
-                     + f'<div class="hint">이번 턴에 받아들이지 않으면 사라집니다 → “{escape(o["accept"])}”</div></div>')
+                     + f'<div class="hint">{"그 자리를 떠나기 전까지 남아 있습니다" if o.get("id") == "supply" else "다음 행동에서 받아들이지 않으면 사라집니다"} → “{escape(o["accept"])}”</div></div>')
 
     # 시간 + 날씨
     parts.append(

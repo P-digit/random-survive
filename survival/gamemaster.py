@@ -281,10 +281,20 @@ def build_input(state, player_text, recap=None):
                   f"위험: {state.offer.get('risk', '알 수 없음')}) "
                   "→ 서술 끝에 굵게 알리고 플레이어의 선택을 기다린다. 현재 장면에서 일어날 수 없으면 reject_event."]
     elif state.offer:
-        parts += ["[기회 - 지난 턴의 제안이 아직 유효함]",
-                  f"{state.offer['text']} (잘 풀리면: {state.offer.get('detail', '')}) "
-                  "→ 플레이어의 이번 행동이 이 제안을 받아들이는 것이면 accept_offer 를 호출한다. "
-                  "아니면 기회는 사라졌다고 짧게 언급한다."]
+        from .events import OFFER_EXIT, PERSISTENT_OFFERS
+        exit_text = OFFER_EXIT.get(state.offer.get("id"), ("기회는 지나갔다.",))[0]
+        if state.offer.get("id") in PERSISTENT_OFFERS:
+            parts += ["[기회 - 아직 그 자리에 있음]",
+                      f"{state.offer['text']} → 플레이어가 받아들이면 accept_offer 를 호출한다."]
+        else:
+            parts += ["[기회 - 이번 턴이 마지막]",
+                      f"{state.offer['text']} (잘 풀리면: {state.offer.get('detail', '')}) "
+                      "→ 플레이어의 이번 행동이 이 제안을 받아들이는 것이면 accept_offer 를 호출한다. "
+                      f"아니면 이번 턴이 끝나며 기회는 사라진다. 서술 끝에 이 모습을 넣는다: '{exit_text}'"]
+    gone = [e for e in state.expired_offers if 0 < state.turn - e["turn"] <= 3]
+    if gone and not state.offer:
+        parts += ["[지나간 기회 - 이미 떠나고 없다. 다시 나타나지 않는다]",
+                  "\n".join(f"- '{e['accept']}': {e['exit']}" for e in gone)]
     if state.event:
         kind = {"danger": "위험", "lucky": "행운", "neutral": "중립"}[state.event["kind"]]
         where = f" ({state.event['direction']} 방향, 단서 {state.event['lead_id']})" if state.event.get("lead_id") else ""
@@ -474,6 +484,9 @@ def collect_notices(state):
         notices.append({"kind": "bad" if result["bad"] else "good",
                         "title": ("❌ 선택의 대가 — " if result["bad"] else "✅ 기회를 잡았다 — ") + result["title"],
                         "text": result["text"]})
+    expired = flags.get("offer_expired")
+    if expired:
+        notices.append({"kind": "info", "title": f"⌛ 기회가 지나갔다 — {expired['accept']}", "text": expired["exit"]})
     attempt = flags.get("attempt")
     if attempt:
         verdict = "성공" if attempt["success"] else "실패"

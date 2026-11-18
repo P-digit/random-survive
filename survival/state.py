@@ -14,7 +14,7 @@ from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CRI
                      WANTED_ON_FAIL, WANTED_ON_SUCCESS,
                      MAJOR_EVENT_PITY_TURNS, START_ITEMS, START_MONEY, TRAVEL_RULES,
                      VITALS_DRAIN)
-from .events import (BIOME_HAZARDS, BIOMES, classify_biome, roll_event,
+from .events import (BIOME_HAZARDS, BIOMES, OFFER_EXIT, PERSISTENT_OFFERS, classify_biome, roll_event,
                      roll_major_event)
 from .risk_model import predict_risk
 from .weather import get_weather, weather_category
@@ -143,6 +143,7 @@ class GameState:
     enemies: list = field(default_factory=list)          # 원한이 있는 사람 [{name, role, status, lat, lon, place}]
     notorious: list = field(default_factory=list)        # 범죄자로 알려진 곳 [{place, lat, lon, crime, turn}]
     stolen_items: list = field(default_factory=list)     # 훔친 물건 (체포되면 압수)
+    expired_offers: list = field(default_factory=list)   # 지나간 기회 [{id, accept, exit, turn}]
     image_scene: str = ""             # 지금 그림이 그려진 장면 (장소+장면 이름)
     image_night: bool = False         # 지금 그림이 밤 그림인지
     wanted: float = 0.0               # 수배도 0~100
@@ -899,6 +900,8 @@ class GameState:
         self.scene_features, self.scene_seen = [], []
         if km >= 3:
             self.crime_scene = None          # 범죄 현장을 떠났다
+            if self.offer and self.offer.get("id") in PERSISTENT_OFFERS:
+                self.offer = None            # 두고 온 보급 상자는 그 자리에 남는다
         if km >= 20:          # 멀리 떠나면 그곳의 단서와 '여기서만' 유효한 사실은 더 이상 의미가 없다
             self.leads = []
             self.facts = [f for f in self.facts if f["scope"] == "always"]
@@ -915,6 +918,32 @@ class GameState:
             return True
         self._arrive_at_new_place(method)
         return False
+
+    def expire_offer(self):
+        """기회가 지나갔다: 제안한 사람·탈것은 떠나고, 장면에서도 사라진다."""
+        offer, self.offer = self.offer, None
+        if not offer:
+            return
+        exit_text, ko_words, en_words = OFFER_EXIT.get(offer.get("id"), ("기회는 지나갔다.", (), ()))
+        self.expired_offers = (self.expired_offers + [{"id": offer.get("id"), "accept": offer.get("accept", ""),
+                                                      "exit": exit_text, "turn": self.turn}])[-5:]
+        self.remember(exit_text)
+        self.turn_flags["offer_expired"] = {"accept": offer.get("accept", ""), "exit": exit_text}
+        # 장면에서 지운다: 보이는 것, 그림에서 읽은 것, 등장인물, 그림 묘사의 해당 문장
+        gone = lambda s: any(w in s for w in ko_words)               # noqa: E731
+        had = any(gone(s) for s in self.scene_features + self.scene_seen)
+        self.scene_features = [s for s in self.scene_features if not gone(s)]
+        self.scene_seen = [s for s in self.scene_seen if not gone(s)]
+        self.characters = [c for c in self.characters if not (gone(c["role"]) or gone(c["name"]))]
+        if en_words and any(w in self.scene_desc.lower() for w in en_words):
+            sentences = re.split(r"(?<=[.!?])\s+", self.scene_desc)
+            self.scene_desc = " ".join(s for s in sentences if not any(w in s.lower() for w in en_words))
+            had = True
+        if had:
+            self.scene_dirty = True      # 그림에 남아 있던 트럭 등을 지우려면 다시 그린다
+
+    def recently_expired(self, offer_id, turns=6):
+        return any(e["id"] == offer_id and self.turn - e["turn"] <= turns for e in self.expired_offers)
 
     def offer_needs(self):
         """조건이 붙은 기회 중 지금 허용되는 것."""
@@ -1253,7 +1282,12 @@ class GameState:
         """대형 이벤트(기회)를 받아들인다. 좋은 결과일지 나쁜 결과일지는 엔진이 굴려서 정한다."""
         offer = self.offer
         if not offer or self.status != "playing":
-            return {"success": False, "message": "지금 받아들일 수 있는 제안이 없다. (이미 지나갔거나 없었다)"}
+            last = self.expired_offers[-1] if self.expired_offers else None
+            if last and self.turn - last["turn"] <= 3:
+                return {"success": False,
+                        "message": f"그 기회('{last['accept']}')는 이미 지나갔다. {last['exit']} "
+                                   "타거나 받아들였다고 서술하지 마라. 이미 떠나고 없다."}
+            return {"success": False, "message": "지금 받아들일 수 있는 제안이 없다."}
         self.offer = None
         bad = offer.get("bad") or {}
         is_bad = bool(bad) and random.random() < bad.get("chance", 0)
@@ -1442,6 +1476,8 @@ class GameState:
                                           allowed_needs=self.offer_needs())
             if self.offer and self.notorious_here() and self.offer["id"] in ("korean", "news", "trucker", "convoy"):
                 self.offer = None                  # 범죄자로 알려진 곳에서는 아무도 돕겠다고 나서지 않는다
+            if self.offer and self.recently_expired(self.offer["id"]):
+                self.offer = None                  # 방금 놓친 기회가 곧바로 다시 찾아오지는 않는다
             if self.offer:
                 self.offer = self.plan_offer(self.offer)
             if self.offer:               # 지금 장면에 맞는 기회가 없으면 다음 턴에 다시 시도한다
@@ -1454,8 +1490,8 @@ class GameState:
         if not self.time_passed_this_turn and self.status == "playing" and default_hours > 0:
             self.pass_time(default_hours, default_activity)
         self.refresh_risk()
-        if self.offer and self.offer.get("turn", 0) < self.turn:
-            self.offer = None            # 제안은 나온 다음 턴까지만 유효하다
+        if self.offer and self.offer.get("turn", 0) < self.turn and self.offer.get("id") not in PERSISTENT_OFFERS:
+            self.expire_offer()          # 제안은 나온 다음 턴까지만 유효하다
         now = self._tracked()
         self.delta = {k: round(now[k] - self._snapshot.get(k, now[k]), 2) for k in now}
         # 낮↔밤 변화는 장면이 바뀐 것이 아니다. 그림은 같은 장면을 편집해 빛만 바꾼다 (app.py)
