@@ -555,7 +555,7 @@ def test_image_matches_declared_scene(game):
     prompt = imagegen.build_prompt(game)
     assert "abandoned log cabin" in prompt and "boreal conifer forest" in prompt and "winter" in prompt
     assert not imagegen.HANGUL.search(prompt)                # 그림 지시문에는 한글이 없다
-    assert "Do NOT draw any building" in prompt            # 야생에서는 밝히지 않은 건물을 그리지 않는다
+    assert "untouched nature with no trace of people" in prompt   # 야생에서는 밝히지 않은 건물을 그리지 않는다
 
     game.scene_seen = ["버려진 오두막", "낡은 헛간"]        # Vision이 그림에서 추가로 발견한 것
     game.begin_turn()
@@ -1221,7 +1221,7 @@ def test_edit_keeps_composition(game):
     game.weather.update(code=63)
     game.start_hour, game.elapsed_hours = 6, 0
     prompt = imagegen.build_edit_prompt(game)
-    assert "Keep the exact same camera angle" in prompt and "every person" in prompt
+    assert "Keep the exact same camera angle" in prompt and "nothing new" in prompt
     assert "dawn" in prompt and "raining" in prompt
     calls = {}
 
@@ -1617,7 +1617,7 @@ def test_checked_edit_retries_then_discards(game, tmp_path):
     client = fake_image_client(["큰 나무, 불 켜진 오두막", "큰 나무, 밤하늘"], edits)
     path, seen = imagegen.checked_edit(client, game, str(prev))
     assert path and seen == ["큰 나무", "밤하늘"] and len(edits) == 2 and "STRICT" in edits[1]
-    assert "Do not add any building" in edits[0]
+    assert "The picture contains: A large tree in the savanna." in edits[0] and "house" not in edits[0]
 
     edits = []                                      # 두 번 다 생기면 편집본을 버린다
     client = fake_image_client(["큰 나무, 오두막", "큰 나무, 오두막"], edits)
@@ -1646,7 +1646,8 @@ def test_draw_scene_keeps_old_image_or_shares_what_is_visible(game, monkeypatch)
 def test_night_wild_prompt_forbids_new_lights(game):
     game.place_type, game.start_hour, game.elapsed_hours = "야생", 21, 0
     game.set_scene("outdoor", "초원", "Open grassland.", ["풀"])
-    assert "do not add lit windows" in imagegen.build_prompt(game)
+    prompt = imagegen.build_prompt(game)
+    assert "moonlight and starlight" in prompt and "artificial" not in prompt
 
 
 # ---------- 17차 수정: 범죄 의도와 범죄의 결과 ----------
@@ -2069,3 +2070,34 @@ def test_no_rewrite_when_band_unchanged(game, monkeypatch):
     game.health = 90
     body = gamemaster.run_turn(game, "주변을 둘러본다")
     assert len(calls) == 1 and f"체력 {round(game.health)}" in body
+
+
+# ---------- 22차 수정: 그림 지시문을 한 번에 맞게 ----------
+def test_wild_prompts_do_not_name_what_must_not_appear(game):
+    game.place_type, game.start_hour, game.elapsed_hours = "야생", 22, 0
+    game.set_scene("outdoor", "초원", "Open grassland with a lone acacia tree.", ["아카시아 나무"])
+    for prompt in (imagegen.build_prompt(game), imagegen.build_edit_prompt(game)):
+        low = prompt.lower()
+        # 금지할 물건 이름(집·등불·창문·표지판)을 말하지 않는다: 말하면 이미지 모델이 그것을 그린다
+        assert not any(w in low for w in ("house", "lantern", "lamp", "window", "cabin", "sign", "architecture",
+                                          "artificial"))
+        assert "moonlight and starlight" in prompt
+    assert "Relight this exact picture" in imagegen.build_edit_prompt(game)
+
+
+def test_edit_prompt_pins_down_what_is_in_the_picture(game, tmp_path):
+    path = tmp_path / "scene.png"
+    path.write_bytes(b"png")
+    client = SimpleNamespace(responses=SimpleNamespace(create=lambda **k: SimpleNamespace(
+        output_text="큰 바오밥나무 | large baobab tree, 붉은 흙 평원 | red dirt plain, 해 | sun")))
+    assert imagegen.read_image(client, str(path)) == (["큰 바오밥나무", "붉은 흙 평원", "해"],
+                                                      ["large baobab tree", "red dirt plain", "sun"])
+    assert imagegen.describe_image(client, str(path)) == ["큰 바오밥나무", "붉은 흙 평원", "해"]
+    game.place_type = "야생"
+    game.set_scene("outdoor", "바오밥 아래", "A baobab tree on a plain.", ["바오밥나무"])
+    game.scene_seen_en = ["large baobab tree", "red dirt plain"]
+    assert "The picture contains: large baobab tree, red dirt plain." in imagegen.build_edit_prompt(game)
+    game.place_type = "마을"                                             # 마을의 밤은 있던 불빛만 켜진다
+    game.start_hour = 22
+    edit = imagegen.build_edit_prompt(game)
+    assert "Only lights that already exist" in edit and "written in" in edit

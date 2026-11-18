@@ -131,6 +131,7 @@ class GameState:
     scene_desc: str = ""              # 이미지용 영어 묘사
     scene_features: list = field(default_factory=list)   # GM이 밝힌, 그 장면에 보이는 것들
     scene_seen: list = field(default_factory=list)       # 생성된 이미지를 Vision으로 읽어낸, 실제로 그려진 것들
+    scene_seen_en: list = field(default_factory=list)    # 같은 것의 영어 이름 (그림 편집 지시문에 쓴다)
     climate: dict = field(default_factory=dict)          # 이 좌표의 기후 (climate.py)
     climate_at: list = field(default_factory=list)       # 기후를 조회한 좌표 [lat, lon]
     notices: list = field(default_factory=list)          # 이번 턴의 중요 알림 (대화창 표시용)
@@ -222,6 +223,7 @@ class GameState:
         self.scene_features = features[:6]
         self.scene_dirty = True
         self.scene_seen = []           # 새 그림이 그려지면 다시 읽어 들인다
+        self.scene_seen_en = []
         self.characters = []           # 다른 곳으로 옮기면 그곳의 인물은 새로 만난다
         self.turn_flags["scene_changed"] = True
         self.flags.pop("at_embassy", None)
@@ -933,7 +935,7 @@ class GameState:
             self.wanted = clamp(self.wanted - 15)     # 멀리 떠나면 쫓는 사람이 줄어든다
         self.turn_flags["scene_changed"] = True
         self.scene_setting, self.scene_place, self.scene_desc = "outdoor", "", ""   # 새 장소의 야외에서 시작
-        self.scene_features, self.scene_seen = [], []
+        self.scene_features, self.scene_seen, self.scene_seen_en = [], [], []
         if km >= 3:
             self.crime_scene = None          # 범죄 현장을 떠났다
             if self.offer and self.offer.get("id") in PERSISTENT_OFFERS:
@@ -970,6 +972,10 @@ class GameState:
         had = any(gone(s) for s in self.scene_features + self.scene_seen)
         self.scene_features = [s for s in self.scene_features if not gone(s)]
         self.scene_seen = [s for s in self.scene_seen if not gone(s)]
+        if en_words:
+            self.scene_seen_en = [s for s in self.scene_seen_en if not any(w in s.lower() for w in en_words)]
+        elif had:
+            self.scene_seen_en = []    # 영어로 가릴 수 없으면 GM의 묘사로 돌아간다
         self.characters = [c for c in self.characters if not (gone(c["role"]) or gone(c["name"]))]
         if en_words and any(w in self.scene_desc.lower() for w in en_words):
             sentences = re.split(r"(?<=[.!?])\s+", self.scene_desc)
