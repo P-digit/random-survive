@@ -160,6 +160,11 @@ INSTRUCTIONS = """
 - 범죄를 저지른 뒤의 세계는 그 범죄를 기억한다. [등장인물]의 상태를 반드시 따른다:
   피해자는 당신을 돕지 않고, 태워 주지 않고, 친근하게 대화하지 않는다. 기절한 사람은 대답하지 못한다.
   빼앗은 차의 주인과 아무 일 없었던 듯 이야기하는 장면은 만들지 않는다.
+- 범죄의 여파는 끝나지 않는다. [범죄의 여파]와 [당신에게 원한이 있는 사람]을 매 턴 반영한다:
+  현장에 머물면 피해자와 주민·경찰이 반응하고, 범죄자로 알려진 곳의 사람들은 피하거나 신고하며 돕지 않는다.
+  훔친 차는 경찰의 눈에 띄고, 장물은 팔거나 보여 주면 의심받는다. 아무 일 없었던 듯 진행하지 않는다.
+- 물건과 돈은 어떻게 얻었는지(source, money_source)를 정직하게 적는다. 훔친 것은 범죄 판정이 성공했을 때만,
+  산 것은 pay 로 값을 낸 뒤에만 얻는다.
 - 추천 행동도 범죄 이후의 상황에 맞게 제시한다(현장을 벗어난다, 숨는다, 트럭을 몰고 떠난다 등).
   범죄 의도가 없는 상황에서는 범죄를 추천 행동으로 내세우지 않는다(위험한 선택지는 가끔만).
 
@@ -248,6 +253,13 @@ def build_input(state, player_text, recap=None):
     if visible:
         parts += ["[화면에 보이는 것 - 플레이어가 보고 있는 장면 이미지에 그려진 대상. 모두 실제로 존재한다]",
                   ", ".join(visible)]
+    enemies = [e for e in state.enemies_nearby() if not state.find_character(e["name"])]
+    if enemies:
+        parts += ["[당신에게 원한이 있는 사람 - 이 근처에 있다. 다시 마주치면 이 상태 그대로 반응한다]",
+                  "\n".join(f"- {e['name']} ({e['role']}) — {e['status']}" for e in enemies)]
+    aftermath = state.crime_aftermath()
+    if aftermath:
+        parts += ["[범죄의 여파 - 이후 진행에 반드시 반영한다]", "\n".join(f"- {a}" for a in aftermath)]
     if state.characters:
         parts += ["[등장인물 - 이 장소에서 이미 만난 사람. 같은 이름·역할·생김새로, 적힌 상태 그대로 등장시킨다]",
                   "\n".join(f"- {c['name']} ({c['role']}){': ' + c['look'] if c['look'] else ''}"

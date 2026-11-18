@@ -52,6 +52,10 @@ TOOLS = [
             "money": {"type": "number",
                       "description": "돈의 변화(USD). +는 번 돈·받은 돈·주운 돈(한 번에 최대 +600), "
                                      "-는 잃은 돈(도둑맞음·빼앗김·벌금). 물건값으로 쓴 돈은 pay 로"},
+            "money_source": {"type": "string", "enum": ["work", "gift", "found", "sold", "stolen", "lost", "none"],
+                             "description": "money 가 0이 아닐 때 그 돈의 출처. work 일한 대가, gift 받음, found 주움, "
+                                            "sold 물건을 팖, stolen 훔침(같은 턴에 범죄 판정 성공 필요), "
+                                            "lost 잃음·빼앗김·벌금(-), none 변화 없음"},
             "consumed_items": {"type": "array", "items": {"type": "string"},
                                "description": "이 행동으로 먹거나 마시거나 써서 없어진 소지품의 이름들. "
                                               "받아 둔 빗물, 딴 열매처럼 환경에서 얻어 소지품에 넣어 둔 것도 "
@@ -74,6 +78,11 @@ TOOLS = [
                                   "carryable": {"type": "boolean",
                                                 "description": "혼자 들고 이동할 수 있는 물건이면 true, 아니면 false"}}}},
             "remove": {"type": "array", "items": {"type": "string"}, "description": "없어진 물건 이름들. 없으면 빈 배열"},
+            "source": {"type": "string", "enum": ["found", "bought", "gift", "reward", "stolen", "none"],
+                       "description": "add 한 물건을 어떻게 얻었나. found 주움·채집, bought 삼(같은 턴에 pay 필요), "
+                                      "gift 누군가 줌, reward 일의 대가, stolen 훔침(같은 턴에 범죄 판정 성공 필요), "
+                                      "none 얻은 것이 없음"},
+            "giver": {"type": "string", "description": "gift·reward 일 때 준 사람(이름이나 역할). 아니면 빈 문자열"},
         },
     ),
     _function(
@@ -324,6 +333,22 @@ ACCEPT_WORDS = ("받아들", "수락", "승낙", "응한다", "응하겠", "응�
                 "태워달", "태워주", "데려다달", "데려다주")
 
 
+def gain_problem(state, source, giver=""):
+    """판정 없이 범죄로 얻거나, 값을 내지 않고 산 것처럼 처리하는 것을 막는다. 문제가 없으면 None."""
+    attempt = state.turn_flags.get("attempt") or {}
+    if source == "stolen" and not (attempt.get("success") and attempt.get("illegal")):
+        return ("훔친 것은 같은 턴에 attempt_action(crime 지정)으로 판정해 성공했을 때만 얻는다. 판정 없이 "
+                "훔친 것으로 처리하지 마라.")
+    if source == "bought" and not state.turn_flags.get("paid"):
+        return "산 물건은 같은 턴에 pay 로 값을 먼저 내야 얻는다."
+    if source in ("gift", "reward") and giver:
+        person = state.find_character(giver)
+        enemy = next((e for e in state.enemies_nearby() if e["name"] == (person or {}).get("name", giver)), None)
+        if enemy:
+            return f"{enemy['name']}은(는) 당신에게 원한이 있다({enemy['status'][:40]}…). 아무것도 주지 않는다."
+    return None
+
+
 def player_asked_for(state, name, args):
     """GM이 이동 툴을 쓸 때, 플레이어가 정말 그곳으로 가겠다고 했는지. (플레이어 입력이 없으면 허용)"""
     text = (state.turn_flags.get("player_text") or "").replace(" ", "")
@@ -430,6 +455,13 @@ def execute_tool(state, name, arguments, client=None):
             state.pass_time(args.get("hours", 1), args.get("activity", "other"),
                             sheltered=bool(args.get("sheltered", False)))
             result = {"ok": True, "경과시간": round(state.elapsed_hours - before, 2)}
+        elif name == "update_status" and float(args.get("money", 0) or 0) > 0 \
+                and gain_problem(state, str(args.get("money_source", "none"))):
+            result = {"error": gain_problem(state, str(args.get("money_source", "none"))),
+                      "안내": "돈 변화를 빼고 다시 호출하라."}
+        elif name == "update_inventory" and args.get("add") \
+                and gain_problem(state, str(args.get("source", "found")), str(args.get("giver", ""))):
+            result = {"error": gain_problem(state, str(args.get("source", "found")), str(args.get("giver", "")))}
         elif name == "update_status":
             state.apply_delta(
                 health=float(args.get("health", 0)), satiety=float(args.get("satiety", 0)),
