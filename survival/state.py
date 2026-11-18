@@ -138,6 +138,11 @@ class GameState:
     flags: dict = field(default_factory=dict)            # on_road, can_call, embassy_visited, at_airport, at_embassy
     characters: list = field(default_factory=list)       # 이 장소에서 만난 인물 [{name, role, look}]
     journey: dict | None = None       # 여러 턴에 걸친 목적지 이동 {type, name, label, lat, lon, place}
+    recent_inputs: list = field(default_factory=list)    # 최근 플레이어 입력 (범죄 의도의 맥락 판단용)
+    crime_scene: dict | None = None   # 방금 범죄를 저지른 현장 {lat, lon, turn, hours, crime, victim, witnessed, knocked_out}
+    enemies: list = field(default_factory=list)          # 원한이 있는 사람 [{name, role, status, lat, lon, place}]
+    notorious: list = field(default_factory=list)        # 범죄자로 알려진 곳 [{place, lat, lon, crime, turn}]
+    stolen_items: list = field(default_factory=list)     # 훔친 물건 (체포되면 압수)
     image_scene: str = ""             # 지금 그림이 그려진 장면 (장소+장면 이름)
     image_night: bool = False         # 지금 그림이 밤 그림인지
     wanted: float = 0.0               # 수배도 0~100
@@ -221,10 +226,67 @@ class GameState:
         for person in self.characters:
             if person["name"] == name or (role and person["role"] == role):
                 return person          # 이미 있는 사람: 처음 정한 모습 그대로
-        person = {"name": name, "role": role, "look": look}
+        person = {"name": name, "role": role, "look": look, "status": ""}
         self.characters.append(person)
         self.characters = self.characters[-6:]
         return person
+
+    def find_character(self, who):
+        """이름이나 역할로 인물을 찾는다 ('트럭 기사' → 이름이 '아메드'이고 역할이 '트럭 기사'인 사람)."""
+        who = str(who or "").strip()
+        if not who:
+            return None
+        flat = who.replace(" ", "")
+        for person in self.characters:
+            for key in (person["name"], person["role"]):
+                k = (key or "").replace(" ", "")
+                if k and (k in flat or flat in k):
+                    return person
+        return None
+
+    def mark_victim(self, who, status):
+        """범죄의 피해자를 기록한다. 이후 GM은 이 사람을 이 상태 그대로 다뤄야 한다."""
+        person = self.find_character(who)
+        if person is None:
+            person = {"name": str(who).strip()[:20], "role": "피해자", "look": "", "status": ""}
+            self.characters.append(person)
+            self.characters = self.characters[-6:]
+        person["status"] = status
+        enemy = next((e for e in self.enemies if e["name"] == person["name"]), None)
+        if enemy is None:
+            enemy = {"name": person["name"], "role": person["role"]}
+            self.enemies.append(enemy)
+            self.enemies = self.enemies[-8:]
+        enemy.update(status=status, lat=self.lat, lon=self.lon, place=self.place_name)
+        return person
+
+    def enemies_nearby(self, km=30):
+        return [e for e in self.enemies if geo.haversine_km(self.lat, self.lon, e["lat"], e["lon"]) <= km]
+
+    def notorious_here(self, km=30):
+        return next((n for n in self.notorious
+                     if geo.haversine_km(self.lat, self.lon, n["lat"], n["lon"]) <= km), None)
+
+    def crime_aftermath(self):
+        """범죄가 남긴 여파. 매 턴 GM에게 전달되어 이후 진행에 반영된다."""
+        notes = []
+        if self.wanted >= 1:
+            notes.append(f"수배도 {self.wanted:.0f}/100" + (" — 공항·항구 검문에서 붙잡힐 수 있다"
+                                                           if self.wanted >= WANTED_AIRPORT_LIMIT else ""))
+        scene = self.crime_scene
+        if scene and (scene["lat"], scene["lon"]) == (self.lat, self.lon):
+            ago = self.elapsed_hours - scene["hours"]
+            notes.append(f"지금 있는 곳은 {ago:.1f}시간 전에 {scene['crime']}을(를) 저지른 현장이다"
+                         + (f" (목격: {scene['witnessed']})" if scene["witnessed"] != "none" else " (목격자 없음)"))
+        bad = self.notorious_here()
+        if bad and self.place_type in ("마을", "도시"):
+            notes.append(f"이 지역에서는 당신이 {bad['crime']}을(를) 저지른 범죄자로 알려져 있다. 사람들이 알아보고 "
+                         "피하거나 신고한다. 도움을 주지 않는다.")
+        if self.vehicle and self.vehicle.get("stolen"):
+            notes.append(f"타고 있는 {self.vehicle['name']}은(는) 훔친 것이다. 경찰이 보면 수상히 여긴다.")
+        if self.stolen_items:
+            notes.append("훔친 물건을 가지고 있다: " + ", ".join(self.stolen_items) + " (체포되면 압수)")
+        return notes
 
     def visible_things(self):
         """지금 화면(장면 이미지)에 보이는 것들: GM이 밝힌 것 + 실제 그림에서 읽어낸 것."""
@@ -504,7 +566,7 @@ class GameState:
 
     # ---------- 자유 행동 ----------
     def attempt(self, action, difficulty="normal", crime="none", witnessed="none", violent=False,
-                item="", stealth=False, success_money=0, success_items=None):
+                item="", stealth=False, success_money=0, success_items=None, victim=""):
         """결과가 불확실한 행동을 판정한다. 성공 확률은 엔진이 계산하고 주사위를 굴린다.
 
         GM은 난이도, 범죄 종류, 목격자, 폭력 여부만 정하고 성공 여부는 정하지 못한다.
@@ -559,10 +621,15 @@ class GameState:
                 before = list(self.items)
                 rejected = self.update_items(add=list(success_items))
                 got = [i for i in self.items if i not in before]
+                if crime != "none":
+                    self.stolen_items = (self.stolen_items + got)[-10:]
                 if got:
                     effects.insert(0, "얻은 물건: " + ", ".join(got))
         self.turn_flags["attempt"] = {"action": str(action)[:40], "chance": chance, "success": success,
-                                      "illegal": crime != "none", "crime": crime, "effects": effects}
+                                      "illegal": crime != "none", "crime": crime, "effects": effects,
+                                      "victim": str(victim or "").strip()}
+        if crime != "none":
+            self._record_crime(str(action)[:40], crime, success, witnessed, bool(violent), str(victim or "").strip())
         return {"success": success, "chance": f"{chance * 100:.0f}%", "보정": reasons or ["없음"],
                 "엔진이_적용한_결과": effects or ["없음"],
                 **({"거부된_물건": rejected} if rejected else {}),
@@ -570,6 +637,40 @@ class GameState:
                         "acquire_vehicle 을 호출하라." if success else
                         "실패했다. 목표를 이루지 못했다. 실패를 그대로 서술하고, 상대의 반응(반격, 신고, 도주)을 "
                         "현실적으로 그려라. 이미 엔진이 적용한 피해를 다시 적용하지 마라.")}
+
+    def _record_crime(self, action, crime, success, witnessed, violent, victim):
+        """범죄의 결과를 세계에 남긴다: 피해자의 상태, 게임 내내 유효한 사실, 끝나 버린 제안, 범죄 현장."""
+        if victim:
+            what = leads_api.eul(crime)              # '차량 절도를', '폭행을'
+            if success and violent:
+                status = (f"당신에게 {what} 당해 쓰러져 있다(기절·부상). 깨어나면 당신을 적대하고 신고한다. "
+                          "당신을 돕지 않고 태워 주지도 않는다.")
+            elif success and witnessed == "none":
+                status = f"아직 {what} 당한 줄 모른다. 알게 되면 신고할 것이다."
+            elif success:
+                status = f"당신에게 {what} 당한 것을 안다. 적대적이며 신고하려 한다. 당신을 돕지 않는다."
+            else:
+                status = (f"당신의 {crime} 시도를 알아챘다. 적대적이고 경계한다. 소리쳐 사람을 부르거나 신고한다. "
+                          "당신을 돕지 않는다.")
+            self.mark_victim(victim, status)
+        result = "성공" if success else "실패"
+        self.remember(f"{action} — {result} ({crime}" + (f", 피해자: {victim}" if victim else "")
+                      + f", 목격: {witnessed})", "always")
+        if self.offer:                       # 그 사람의 제안(태워 주기 등)은 끝났다
+            offer_words = [w for w in (self.offer.get("accept", "") + " " + self.offer.get("text", "")).split()
+                           if len(w) >= 2]
+            target = (action + " " + victim).replace(" ", "")
+            if any(w.rstrip("에을를이가은는의로") in target for w in offer_words):
+                self.remember(f"범죄 때문에 '{self.offer['accept']}' 제안은 사라졌다.")
+                self.offer = None
+        self.crime_scene = {"lat": self.lat, "lon": self.lon, "turn": self.turn, "hours": self.elapsed_hours,
+                            "crime": crime, "victim": victim, "witnessed": witnessed,
+                            "knocked_out": bool(success and violent)}
+        if witnessed != "none" and self.place_type in ("마을", "도시"):
+            if not self.notorious_here(5):
+                self.notorious.append({"place": self.place_name, "lat": self.lat, "lon": self.lon,
+                                       "crime": crime, "turn": self.turn})
+                self.notorious = self.notorious[-6:]
 
     def pay(self, amount, purpose=""):
         """물건·서비스 값을 낸다. 돈이 모자라면 아무것도 내지 않고 실패한다."""
@@ -600,6 +701,10 @@ class GameState:
         if self.offer and self.offer.get("id") in ("trucker", "convoy"):
             self.offer = None             # 태워 주겠다던 차를 빼앗았다면 그 제안은 끝난 것이다
         self.remember(f"{label}을(를) 손에 넣음" + (" (훔친 것)" if attempt["illegal"] else ""), "always")
+        if attempt["illegal"] and attempt.get("victim"):
+            person = self.find_character(attempt["victim"])
+            if person and "빼앗" not in person.get("status", ""):
+                person["status"] = f"당신에게 {leads_api.eul(label)} 빼앗겼다. " + person.get("status", "")
         self.turn_flags["vehicle"] = dict(self.vehicle)
         return {"success": True,
                 "message": f"{label}을(를) 손에 넣었다. 연료로 약 {fuel}km를 갈 수 있다. "
@@ -613,6 +718,11 @@ class GameState:
         if self.vehicle:
             lost.append(self.vehicle["name"])
             self.vehicle = None
+        for item in list(self.stolen_items):
+            if item in self.items:
+                self.items.remove(item)
+                lost.append(item)
+        self.stolen_items = []
         for ticket in list(self.tickets):
             lost.append(ticket["item"])
             self.tickets.remove(ticket)
@@ -787,6 +897,8 @@ class GameState:
         self.turn_flags["scene_changed"] = True
         self.scene_setting, self.scene_place, self.scene_desc = "outdoor", "", ""   # 새 장소의 야외에서 시작
         self.scene_features, self.scene_seen = [], []
+        if km >= 3:
+            self.crime_scene = None          # 범죄 현장을 떠났다
         if km >= 20:          # 멀리 떠나면 그곳의 단서와 '여기서만' 유효한 사실은 더 이상 의미가 없다
             self.leads = []
             self.facts = [f for f in self.facts if f["scope"] == "always"]
@@ -1302,16 +1414,34 @@ class GameState:
                 self.event["direction"] = lead["direction"]
             where = f" ({self.event['direction']} 방향)" if self.event.get("direction") else ""
             self.remember(f"{self.day}일차 {self.hour}시: {self.event['text']}{where}")
-        if self.place_type in ("마을", "도시") and self.wanted >= 20 and random.random() < self.wanted / 150:
+        scene = self.crime_scene
+        here = scene and (scene["lat"], scene["lon"]) == (self.lat, self.lon)
+        reaction = None
+        if here and self.turn - scene["turn"] <= 4:
+            who = scene["victim"] or "피해자"
+            ago = self.elapsed_hours - scene["hours"]
+            if scene["knocked_out"] and ago >= 2 and not scene.get("woke"):
+                scene["woke"] = True               # 기절시킨 사람은 두어 시간 뒤 깨어난다
+                reaction = f"쓰러져 있던 {who}이(가) 정신을 차리고 일어나 당신을 향해 소리친다."
+            elif scene["witnessed"] != "none" and (self.turn == scene["turn"] + 1 or random.random() < 0.5):
+                reaction = (f"{who}이(가) 사람들을 데리고 돌아와 당신을 찾고 있다." if self.place_type != "도시"
+                            else "경찰차 사이렌 소리가 가까워진다. 누군가 신고한 것이다.")
+        elif self.notorious_here() and self.place_type in ("마을", "도시") and random.random() < 0.35:
+            reaction = "사람들이 당신을 알아보고 수군거린다. 누군가 경찰을 부르러 달려간다."
+        if reaction:
+            self.event = {"kind": "danger", "text": reaction}
+        elif self.place_type in ("마을", "도시") and self.wanted >= 20 and random.random() < self.wanted / 150:
             self.event = {"kind": "danger",
                           "text": "경찰이 수배 전단 속 얼굴과 당신을 번갈아 보더니 다가온다."
                                   + (" 당신이 몰고 온 차량도 신고된 것이다." if self.vehicle and self.vehicle.get("stolen") else "")}
         # 대형 이벤트(기회): 확률로 발생하고, 오래 안 나오면 반드시 나온다
         waited = self.turn - self.last_major_turn
-        if self.offer is None and self.turn >= 3 and (
+        if self.offer is None and self.turn >= 3 and not reaction and (
                 random.random() < MAJOR_EVENT_CHANCE or waited >= MAJOR_EVENT_PITY_TURNS):
             self.offer = roll_major_event(self.place_type, self.in_extreme_wild, self.indoor,
                                           allowed_needs=self.offer_needs())
+            if self.offer and self.notorious_here() and self.offer["id"] in ("korean", "news", "trucker", "convoy"):
+                self.offer = None                  # 범죄자로 알려진 곳에서는 아무도 돕겠다고 나서지 않는다
             if self.offer:
                 self.offer = self.plan_offer(self.offer)
             if self.offer:               # 지금 장면에 맞는 기회가 없으면 다음 턴에 다시 시도한다
@@ -1356,6 +1486,7 @@ class GameState:
             "수배도": f"{self.wanted:.0f}/100" + (" - 공항·항구 검문에서 붙잡힐 수 있음" if self.wanted >= WANTED_AIRPORT_LIMIT else ""),
             "초반_제한": (f"앞으로 약 {max(1, round(EARLY_GAME_HOURS - self.elapsed_hours))}시간은 도시·공항·공관으로 갈 수 "
                          "없다(마을까지만)") if self.early else "없음",
+            "범죄의_여파": self.crime_aftermath() or "없음",
             "진행_중인_여정": (f"{self.journey['label']}까지 약 "
                                f"{geo.haversine_km(self.lat, self.lon, self.journey['lat'], self.journey['lon']):.0f}km 남음"
                                if self.journey else "없음"),

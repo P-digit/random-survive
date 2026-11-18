@@ -3,6 +3,7 @@ import json
 import re
 
 from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT, OPENAI_API_KEY
+from .intent import crime_intent
 from .state import item_core
 from .tools import TOOLS, execute_tool
 
@@ -138,7 +139,8 @@ INSTRUCTIONS = """
 - [기회]로 나타난 트럭 기사·선장 등도 장면 속 인물이므로, 플레이어가 제안을 받는 대신 그들을 상대로 다른 행동
   (제압, 탈취, 흥정)을 할 수 있다.
 - 폭력은 게임 수준으로 짧게 서술한다. 잔혹하거나 상세한 상해 묘사는 하지 않는다.
-- 추천 행동에도 가끔 위험하지만 보상이 큰 선택지를 섞는다(예: "트럭을 빼앗는다", "창고에 몰래 들어간다").
+- 추천 행동에 위험하지만 보상이 큰 선택지를 가끔 섞을 수 있다. 범죄 선택지는 범죄라는 것이 분명하게 쓴다
+  (예: "트럭을 빼앗는다", "창고에 몰래 들어간다"). '트럭에 타 본다'처럼 범죄인지 모호하게 쓰지 않는다.
 - 야생 한가운데에서 가게·ATM·공항을 찾는 것처럼 장소유형에 맞지 않는 행동도 실패한다.
 
 [소지품 규칙]
@@ -149,6 +151,22 @@ INSTRUCTIONS = """
 - 입장권, 숙박권, 쿠폰, 열쇠 대여처럼 특정 행위를 위해 가진 물건은 그 행위를 마치면 사라진다
   (update_inventory 의 remove). 교통편 표는 탑승하면 엔진이 자동으로 없앤다.
 - 플레이어가 가지고 있지 않은 물건은 쓸 수 없다.
+
+[범죄와 그 결과 - 매우 중요]
+- 범죄로 처리할지는 [플레이어의 의도]를 따른다. '트럭을 타려고 한다', '차에 오른다'처럼 모호한 행동은 의도가
+  없으면 기사에게 부탁하거나 요금을 흥정하는 합법적인 행동으로 해석한다. '빼앗는다', '훔친다', '기절시킨다'처럼
+  직접 지시했거나, 앞서 같은 대상에 대한 범죄를 고려한 맥락이면 범죄로 처리한다.
+- 범죄는 attempt_action 으로 판정하고 피해자(victim)를 적는다. 엔진이 피해자의 상태를 [등장인물]에 기록한다.
+- 범죄를 저지른 뒤의 세계는 그 범죄를 기억한다. [등장인물]의 상태를 반드시 따른다:
+  피해자는 당신을 돕지 않고, 태워 주지 않고, 친근하게 대화하지 않는다. 기절한 사람은 대답하지 못한다.
+  빼앗은 차의 주인과 아무 일 없었던 듯 이야기하는 장면은 만들지 않는다.
+- 범죄의 여파는 끝나지 않는다. [범죄의 여파]와 [당신에게 원한이 있는 사람]을 매 턴 반영한다:
+  현장에 머물면 피해자와 주민·경찰이 반응하고, 범죄자로 알려진 곳의 사람들은 피하거나 신고하며 돕지 않는다.
+  훔친 차는 경찰의 눈에 띄고, 장물은 팔거나 보여 주면 의심받는다. 아무 일 없었던 듯 진행하지 않는다.
+- 물건과 돈은 어떻게 얻었는지(source, money_source)를 정직하게 적는다. 훔친 것은 범죄 판정이 성공했을 때만,
+  산 것은 pay 로 값을 낸 뒤에만 얻는다.
+- 추천 행동도 범죄 이후의 상황에 맞게 제시한다(현장을 벗어난다, 숨는다, 트럭을 몰고 떠난다 등).
+  범죄 의도가 없는 상황에서는 범죄를 추천 행동으로 내세우지 않는다(위험한 선택지는 가끔만).
 
 [결과는 반드시 반영한다 - 매우 중요]
 - 플레이어의 행동으로 생긴 이득과 손해는 서술만 하고 끝내지 않는다. 반드시 툴로 반영한다.
@@ -235,9 +253,17 @@ def build_input(state, player_text, recap=None):
     if visible:
         parts += ["[화면에 보이는 것 - 플레이어가 보고 있는 장면 이미지에 그려진 대상. 모두 실제로 존재한다]",
                   ", ".join(visible)]
+    enemies = [e for e in state.enemies_nearby() if not state.find_character(e["name"])]
+    if enemies:
+        parts += ["[당신에게 원한이 있는 사람 - 이 근처에 있다. 다시 마주치면 이 상태 그대로 반응한다]",
+                  "\n".join(f"- {e['name']} ({e['role']}) — {e['status']}" for e in enemies)]
+    aftermath = state.crime_aftermath()
+    if aftermath:
+        parts += ["[범죄의 여파 - 이후 진행에 반드시 반영한다]", "\n".join(f"- {a}" for a in aftermath)]
     if state.characters:
-        parts += ["[등장인물 - 이 장소에서 이미 만난 사람. 같은 이름·역할·생김새로 계속 등장시킨다]",
+        parts += ["[등장인물 - 이 장소에서 이미 만난 사람. 같은 이름·역할·생김새로, 적힌 상태 그대로 등장시킨다]",
                   "\n".join(f"- {c['name']} ({c['role']}){': ' + c['look'] if c['look'] else ''}"
+                            + (f" — 상태: {c['status']}" if c.get("status") else "")
                             for c in state.characters)]
     if state.scene_place:
         parts += ["[지금 장면 - 같은 곳에 있는 동안 바뀌지 않는다]",
@@ -251,12 +277,12 @@ def build_input(state, player_text, recap=None):
                   "\n".join(f"- {l['id']}: {l['clue']} → {l['direction']}, 약 {l['km']}km" for l in state.leads)]
     if state.offer and state.offer.get("turn") == state.turn:
         parts += ["[기회 - 이번 턴에 새로 찾아온 대형 이벤트]",
-                  f"{state.offer['text']} (잘 풀리면: {state.offer['detail']} / "
+                  f"{state.offer['text']} (잘 풀리면: {state.offer.get('detail', '')} / "
                   f"위험: {state.offer.get('risk', '알 수 없음')}) "
                   "→ 서술 끝에 굵게 알리고 플레이어의 선택을 기다린다. 현재 장면에서 일어날 수 없으면 reject_event."]
     elif state.offer:
         parts += ["[기회 - 지난 턴의 제안이 아직 유효함]",
-                  f"{state.offer['text']} (잘 풀리면: {state.offer['detail']}) "
+                  f"{state.offer['text']} (잘 풀리면: {state.offer.get('detail', '')}) "
                   "→ 플레이어의 이번 행동이 이 제안을 받아들이는 것이면 accept_offer 를 호출한다. "
                   "아니면 기회는 사라졌다고 짧게 언급한다."]
     if state.event:
@@ -270,6 +296,13 @@ def build_input(state, player_text, recap=None):
                   "일치하도록 주변 풍경과 날씨, 몸 상태를 묘사하며 게임을 시작하라. "
                   "시작 턴에는 set_scene 외의 툴을 호출하지 않는다."]
     else:
+        kind, source = state.turn_flags.get("crime_intent", ("none", ""))
+        parts += ["[플레이어의 의도 - 엔진 판정]", {
+            "explicit": "플레이어가 범죄를 직접 지시했다. 그 범죄로 처리한다(attempt_action 의 crime 을 정한다).",
+            "context": f"입력은 모호하지만, 앞서 같은 대상에 대한 범죄를 고려했다('{source}'). 그 범죄를 실행하는 "
+                       "것으로 해석해도 된다.",
+            "none": "범죄 의도가 없다. 모호한 행동은 합법적인 방법(부탁, 흥정, 요금 지불, 일 돕기)으로 해석한다. "
+                    "범죄로 바꾸지 않는다(엔진이 거절한다)."}[kind]]
         parts += [f"[플레이어가 이번 턴에 시도하는 행동 - 턴 {state.turn}]",
                   player_text,
                   "(위 행동 하나만 판정한다. 이것은 시도일 뿐이며, 물건·인물의 존재와 성공 여부는 "
@@ -300,6 +333,9 @@ def auto_money(state, narration):
         state.turn_flags["paid"] = amount
         return -amount
     gain = INCOME.search(text)
+    if gain and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none" \
+            and gain.group(2 if gain.group(1) else 4) in ("훔쳤", "훔쳐"):
+        gain = None                       # 범죄 의도가 없는 턴에 '훔친 돈'은 들어오지 않는다
     if gain:
         amount = min(float((gain.group(1) or gain.group(3)).replace(",", "")), MONEY_GAIN_LIMIT)
         state.money = round(state.money + amount, 2)
@@ -559,8 +595,13 @@ def run_turn(state, player_text=None):
         raise RuntimeError("OpenAI API 키가 없거나 올바르지 않습니다. 프로젝트 폴더의 .env 파일에 "
                            "OPENAI_API_KEY=sk-... 형태로 실제 키를 넣고 프로그램을 다시 실행하세요.")
 
+    prev_suggestions = list(state.suggestions)
     state.begin_turn()
     state.turn_flags["player_text"] = player_text or ""
+    state.turn_flags["prev_suggestions"] = prev_suggestions
+    if player_text:
+        state.turn_flags["crime_intent"] = crime_intent(player_text, prev_suggestions, state.recent_inputs)
+        state.recent_inputs = (state.recent_inputs + [player_text])[-3:]
     if player_text is None:
         state.event = None   # 시작 턴에는 돌발 이벤트 없음
     def first_call(previous_id, recap=None):

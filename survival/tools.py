@@ -52,6 +52,10 @@ TOOLS = [
             "money": {"type": "number",
                       "description": "돈의 변화(USD). +는 번 돈·받은 돈·주운 돈(한 번에 최대 +600), "
                                      "-는 잃은 돈(도둑맞음·빼앗김·벌금). 물건값으로 쓴 돈은 pay 로"},
+            "money_source": {"type": "string", "enum": ["work", "gift", "found", "sold", "stolen", "lost", "none"],
+                             "description": "money 가 0이 아닐 때 그 돈의 출처. work 일한 대가, gift 받음, found 주움, "
+                                            "sold 물건을 팖, stolen 훔침(같은 턴에 범죄 판정 성공 필요), "
+                                            "lost 잃음·빼앗김·벌금(-), none 변화 없음"},
             "consumed_items": {"type": "array", "items": {"type": "string"},
                                "description": "이 행동으로 먹거나 마시거나 써서 없어진 소지품의 이름들. "
                                               "받아 둔 빗물, 딴 열매처럼 환경에서 얻어 소지품에 넣어 둔 것도 "
@@ -74,6 +78,11 @@ TOOLS = [
                                   "carryable": {"type": "boolean",
                                                 "description": "혼자 들고 이동할 수 있는 물건이면 true, 아니면 false"}}}},
             "remove": {"type": "array", "items": {"type": "string"}, "description": "없어진 물건 이름들. 없으면 빈 배열"},
+            "source": {"type": "string", "enum": ["found", "bought", "gift", "reward", "stolen", "none"],
+                       "description": "add 한 물건을 어떻게 얻었나. found 주움·채집, bought 삼(같은 턴에 pay 필요), "
+                                      "gift 누군가 줌, reward 일의 대가, stolen 훔침(같은 턴에 범죄 판정 성공 필요), "
+                                      "none 얻은 것이 없음"},
+            "giver": {"type": "string", "description": "gift·reward 일 때 준 사람(이름이나 역할). 아니면 빈 문자열"},
         },
     ),
     _function(
@@ -120,6 +129,8 @@ TOOLS = [
             "success_money": {"type": "number",
                               "description": "성공하면 얻는 돈(USD). 지갑·금고를 훔치거나 협박해 받는 돈 등. 그 지역 형편에 "
                                              "맞는 구체적인 금액(최대 600). 돈과 무관하면 0. 성공하면 엔진이 바로 넣는다"},
+            "victim": {"type": "string",
+                       "description": "범죄의 피해자(이름이나 역할, 예: '트럭 기사'). 피해자가 없거나 범죄가 아니면 빈 문자열"},
             "success_items": {"type": "array", "items": {"type": "string"},
                               "description": "성공하면 얻는 들고 다닐 수 있는 물건들. 없으면 빈 배열. 탈것은 넣지 말고 "
                                              "acquire_vehicle 로"},
@@ -283,6 +294,9 @@ GO_WORDS = {
     "continue": ("계속 간다", "계속 가", "계속 걷", "이어서 간다", "이어 간다", "이어간다", "가던 길", "마저 간다",
                  "다시 출발", "출발한다", "출발하자"),
 }
+# 탈것을 '갖겠다'는 말 (태워 달라는 것과 구별). 범죄로 빼앗는 경우는 범죄 의도로 따로 판정한다
+OWN_WORDS = ("산다", "사겠", "사자", "살게", "구입", "구매", "빌린", "빌려", "빌리", "렌트", "임대", "대여", "넘겨받",
+             "물려받", "가져간", "가져가", "차지")
 # 단서가 하나뿐일 때 '그쪽으로 간다'처럼 가리키는 말
 POINTING_WORDS = ("그쪽", "저쪽", "그곳", "저곳", "거기", "저기", "소리나는", "소리가나는", "연기나는", "불빛이보이는")
 COMPASS = ("북쪽", "북동쪽", "동쪽", "남동쪽", "남쪽", "남서쪽", "서쪽", "북서쪽")
@@ -317,6 +331,22 @@ TRAVEL_WORDS = {
 # 기회를 받아들인다는 분명한 표현. ('간다', '올라', '네'처럼 다른 말에도 흔히 들어가는 말은 넣지 않는다)
 ACCEPT_WORDS = ("받아들", "수락", "승낙", "응한다", "응하겠", "응할게", "제안을받", "제안대로", "그러겠", "그러자고",
                 "태워달", "태워주", "데려다달", "데려다주")
+
+
+def gain_problem(state, source, giver=""):
+    """판정 없이 범죄로 얻거나, 값을 내지 않고 산 것처럼 처리하는 것을 막는다. 문제가 없으면 None."""
+    attempt = state.turn_flags.get("attempt") or {}
+    if source == "stolen" and not (attempt.get("success") and attempt.get("illegal")):
+        return ("훔친 것은 같은 턴에 attempt_action(crime 지정)으로 판정해 성공했을 때만 얻는다. 판정 없이 "
+                "훔친 것으로 처리하지 마라.")
+    if source == "bought" and not state.turn_flags.get("paid"):
+        return "산 물건은 같은 턴에 pay 로 값을 먼저 내야 얻는다."
+    if source in ("gift", "reward") and giver:
+        person = state.find_character(giver)
+        enemy = next((e for e in state.enemies_nearby() if e["name"] == (person or {}).get("name", giver)), None)
+        if enemy:
+            return f"{enemy['name']}은(는) 당신에게 원한이 있다({enemy['status'][:40]}…). 아무것도 주지 않는다."
+    return None
 
 
 def player_asked_for(state, name, args):
@@ -357,6 +387,17 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
+        elif name == "attempt_action" and str(args.get("crime", "none")) != "none" \
+                and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none":
+            result = {"error": "플레이어는 범죄를 의도하지 않았다. 이 행동을 범죄로 처리하지 마라. 합법적인 방법으로 "
+                               "해석하라: 태워 달라고 부탁하기, 요금·품삯 흥정, 물건값 지불, 일을 돕고 대가 받기 등. "
+                               "결과가 불확실하면 crime='none' 으로 다시 판정하라."}
+        elif name == "acquire_vehicle" and state.turn_flags.get("player_text") \
+                and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none" \
+                and not any(w in state.turn_flags["player_text"].replace(" ", "") for w in OWN_WORDS):
+            result = {"success": False,
+                      "error": "플레이어는 탈것을 갖겠다고 하지 않았다(빼앗기·사기·빌리기 아님). 태워 달라는 것이면 "
+                               "accept_offer(기회가 있을 때)나 travel(method='hitchhike') 로 처리하라."}
         elif name in ("go_to", "follow_lead", "travel", "accept_offer") and not player_asked_for(state, name, args):
             result = {"error": "플레이어는 그곳으로 가겠다고 하지 않았다. 이동 툴을 쓰지 말고, 지금 있는 자리와 그 근처에서 "
                                "행동을 처리하라(쉴 곳·물·먹을 것을 주변에서 찾기 → advance_time, 찾은 곳으로 옮기면 "
@@ -371,7 +412,7 @@ def execute_tool(state, name, arguments, client=None):
                                    str(args.get("crime", "none")), str(args.get("witnessed", "none")),
                                    bool(args.get("violent")), str(args.get("item", "")),
                                    bool(args.get("stealth")), float(args.get("success_money", 0) or 0),
-                                   list(args.get("success_items") or []))
+                                   list(args.get("success_items") or []), str(args.get("victim", "")))
         elif name == "add_lead":
             lead = state.add_lead(args.get("kind"), str(args.get("clue", "")))
             result = ({"ok": True, "단서": f"{lead['id']} {lead['label']} — {lead['direction']}, 약 {lead['km']}km "
@@ -414,6 +455,13 @@ def execute_tool(state, name, arguments, client=None):
             state.pass_time(args.get("hours", 1), args.get("activity", "other"),
                             sheltered=bool(args.get("sheltered", False)))
             result = {"ok": True, "경과시간": round(state.elapsed_hours - before, 2)}
+        elif name == "update_status" and float(args.get("money", 0) or 0) > 0 \
+                and gain_problem(state, str(args.get("money_source", "none"))):
+            result = {"error": gain_problem(state, str(args.get("money_source", "none"))),
+                      "안내": "돈 변화를 빼고 다시 호출하라."}
+        elif name == "update_inventory" and args.get("add") \
+                and gain_problem(state, str(args.get("source", "found")), str(args.get("giver", ""))):
+            result = {"error": gain_problem(state, str(args.get("source", "found")), str(args.get("giver", "")))}
         elif name == "update_status":
             state.apply_delta(
                 health=float(args.get("health", 0)), satiety=float(args.get("satiety", 0)),

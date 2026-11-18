@@ -1647,3 +1647,239 @@ def test_night_wild_prompt_forbids_new_lights(game):
     game.place_type, game.start_hour, game.elapsed_hours = "야생", 21, 0
     game.set_scene("outdoor", "초원", "Open grassland.", ["풀"])
     assert "do not add lit windows" in imagegen.build_prompt(game)
+
+
+# ---------- 17차 수정: 범죄 의도와 범죄의 결과 ----------
+from survival.intent import crime_intent  # noqa: E402
+
+
+def test_crime_intent_classification():
+    assert crime_intent("트럭을 타려고 시도한다")[0] == "none"
+    assert crime_intent("트럭을 타려고 시도한다", ["트럭을 훔칠까?", "물을 찾는다"])[0] == "context"
+    assert crime_intent("트럭을 타려고 시도한다", ["지갑을 훔친다"])[0] == "none"          # 다른 대상
+    assert crime_intent("트럭에 올라탄다", [], ["트럭을 훔칠 방법을 생각한다"])[0] == "context"
+    for text in ["차량을 빼앗는다", "트럭 기사를 기절시킨다", "몰래 짐칸에 숨어 탄다", "무임승차를 한다",
+                 "기사를 속여서 태워 달라고 한다", "가게 물건을 슬쩍한다"]:
+        assert crime_intent(text)[0] == "explicit", text
+    for text in ["구멍으로 안을 훔쳐본다", "멧돼지의 공격을 피한다", "속이 안 좋아 쉰다", "기사에게 태워 달라고 부탁한다"]:
+        assert crime_intent(text)[0] == "none", text
+
+
+TRUCK_OFFER = {"id": "trucker", "text": "장거리 화물 트럭이 멈춰 선다. 기사는 마을까지 간다며 태워 주겠다고 한다.",
+               "accept": "트럭에 올라탄다", "hours": 0, "stats": {}, "items": [], "money": 0, "risk": "",
+               "detail": "근처 마을(약 25km)까지 이동",
+               "bad": {"chance": 0}, "move": {"to": "city_or_village", "max_km": 500, "speed": 60},
+               "dest": {"type": "city_or_village", "name": "근처 마을", "label": "근처 마을", "lat": 47.1,
+                        "lon": 104.1, "km": 25, "place": "마을"}}
+
+
+def gm_tries_to_steal(monkeypatch, game, player_text):
+    """GM이 '트럭 절도 → 트럭 획득'을 시도하고, 거절되면 '제안 수락'으로 바꾸는 상황을 흉내 낸다."""
+    calls = []
+    steal = {"action": "트럭을 빼앗는다", "difficulty": "hard", "crime": "차량 절도", "witnessed": "victim",
+             "violent": True, "item": "", "stealth": False, "success_money": 0, "success_items": [],
+             "victim": "트럭 기사"}
+
+    def fake_create(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            return SimpleNamespace(id="r1", output_text="", output=[
+                SimpleNamespace(type="function_call", name="attempt_action", call_id="a", arguments=json.dumps(steal)),
+                SimpleNamespace(type="function_call", name="acquire_vehicle", call_id="b",
+                                arguments='{"kind": "truck", "name": "화물 트럭"}')])
+        if len(calls) == 2 and any("error" in json.loads(o["output"]) for o in kw["input"]):
+            return SimpleNamespace(id="r2", output_text="", output=[
+                SimpleNamespace(type="function_call", name="accept_offer", call_id="c", arguments="{}")])
+        return SimpleNamespace(id="r3", output=[], output_text="당신은 트럭에 오른다.")
+
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=fake_create)))
+    fix_roll(monkeypatch, 0.0)
+    game.offer = dict(TRUCK_OFFER, turn=game.turn + 1)       # 이번 턴에 유효한 제안
+    gamemaster.run_turn(game, player_text)
+    return calls
+
+
+def test_reported_case_riding_is_not_stealing(game, monkeypatch):
+    """보고된 상황: '트럭을 타려고 시도한다' → 절도가 되면 안 되고, 기사의 제안을 받아들인 것이 된다."""
+    game.suggestions = ["트럭 기사에게 말을 건다", "트럭을 타려고 시도한다", "물을 찾는다"]
+    calls = gm_tries_to_steal(monkeypatch, game, "트럭을 타려고 시도한다")
+    first = [json.loads(o["output"]) for o in calls[1]["input"]]
+    assert "범죄를 의도하지 않았다" in first[0]["error"] and first[1]["success"] is False
+    assert game.vehicle is None and game.wanted == 0 and not any(c.get("status") for c in game.characters)
+    assert game.place_type == "마을"                                          # 대신 트럭을 얻어 타고 마을로
+    assert "범죄 의도가 없다" in calls[0]["input"]
+
+
+def test_crime_allowed_with_context_or_explicit_order(game, monkeypatch):
+    game.suggestions = ["트럭을 훔칠까?", "기사에게 부탁한다", "물을 찾는다"]       # 앞서 범죄를 고려했다
+    calls = gm_tries_to_steal(monkeypatch, game, "트럭을 타려고 시도한다")
+    assert "앞서 같은 대상에 대한 범죄를 고려했다" in calls[0]["input"]
+    assert game.vehicle and game.vehicle["stolen"] and game.wanted > 0
+
+    other = GameState(lat=46.9, lon=103.8, place_name="몽골", weather=fake_weather(), biome="forest",
+                      distance=geo.distance_to_korea(46.9, 103.8))
+    other.suggestions = ["물을 찾는다"]
+    gm_tries_to_steal(monkeypatch, other, "트럭을 빼앗는다")                      # 직접 지시
+    assert other.vehicle and other.vehicle["stolen"]
+
+
+def test_world_remembers_the_crime(game, monkeypatch):
+    fix_roll(monkeypatch, 0.0)
+    game.begin_turn()
+    game.add_character("아메드", "트럭 기사", "50대, 콧수염")
+    game.offer = dict(TRUCK_OFFER, turn=game.turn)
+    out = game.attempt("트럭 기사를 기절시킨다", "hard", crime="차량 절도", witnessed="victim", violent=True,
+                       victim="트럭 기사")
+    assert out["success"]
+    game.acquire_vehicle("truck", "화물 트럭")
+    driver = game.find_character("트럭 기사")
+    assert driver["name"] == "아메드" and "쓰러져" in driver["status"] and "빼앗겼다" in driver["status"]
+    assert game.offer is None                                                 # 태워 주겠다던 제안은 끝났다
+    assert any(f["scope"] == "always" and "차량 절도" in f["text"] for f in game.facts)
+    text = gamemaster.build_input(game, "트럭 기사에게 말을 건다")
+    assert "아메드 (트럭 기사)" in text and "상태: 당신에게" in text and "돕지 않" in text
+
+    game.end_turn(0.5)
+    game.begin_turn()                                                         # 현장에 머물면 반응이 온다
+    assert game.event and "아메드" not in game.event["text"] and "트럭 기사" in game.event["text"]
+
+    game.begin_turn()
+    game.turn_flags["player_text"] = "트럭을 몰고 떠난다"
+    call(game, "travel", method="drive", distance_km=50)                     # 현장을 떠나면 끝
+    assert game.crime_scene is None
+
+
+def test_failed_crime_makes_victim_hostile(game, monkeypatch):
+    fix_roll(monkeypatch, 0.99)
+    game.begin_turn()
+    game.attempt("상인의 지갑을 훔친다", "normal", crime="절도", witnessed="none", victim="시장 상인")
+    merchant = game.find_character("시장 상인")
+    assert "알아챘다" in merchant["status"] and "적대" in merchant["status"]
+
+    fix_roll(monkeypatch, 0.0)
+    game.begin_turn()
+    game.attempt("잠든 여행자의 지갑을 훔친다", "normal", crime="절도", witnessed="none", victim="잠든 여행자")
+    assert "모른다" in game.find_character("잠든 여행자")["status"]
+    assert game.crime_scene["witnessed"] == "none"
+    monkeypatch.setattr(state_module, "roll_event", lambda *a, **k: None)
+    game.end_turn(0.5)
+    game.begin_turn()
+    assert game.event is None                                                  # 아무도 못 봤으면 현장 반응도 없다
+
+
+
+def test_no_vehicle_ownership_from_a_ride_request(game, monkeypatch):
+    fix_roll(monkeypatch, 0.0)
+    game.begin_turn()
+    game.turn_flags["player_text"] = "트럭을 타려고 시도한다"
+    game.turn_flags["crime_intent"] = crime_intent("트럭을 타려고 시도한다")
+    game.attempt("기사를 설득한다", "normal")                               # 합법적인 시도는 성공해도
+    out = call(game, "acquire_vehicle", kind="truck", name="화물 트럭")
+    assert out["success"] is False and game.vehicle is None               # 트럭이 내 것이 되지는 않는다
+    game.begin_turn()
+    game.turn_flags["player_text"] = "주인에게 돈을 주고 오토바이를 산다"
+    game.turn_flags["crime_intent"] = crime_intent(game.turn_flags["player_text"])
+    game.attempt("오토바이 값을 흥정한다", "normal")
+    assert call(game, "acquire_vehicle", kind="motorbike", name="낡은 오토바이")["success"]
+    assert game.vehicle and not game.vehicle["stolen"]
+
+
+def test_stolen_money_not_auto_added_without_intent(game):
+    game.begin_turn()
+    game.turn_flags["crime_intent"] = ("none", "")
+    assert gamemaster.auto_money(game, "당신은 그의 지갑에서 $200를 훔쳤다.") == 0 and game.money == 50
+    assert gamemaster.auto_money(game, "일을 도와 $30를 받았다.") == 30
+
+
+
+# ---------- 18차 수정: 범죄 판정 보강, 판정 없는 범죄 차단, 범죄의 여파 ----------
+def test_more_crimes_are_recognized():
+    for text in ["노점에 불을 지른다", "경찰에게 뇌물을 준다", "여권을 위조한다", "남의 밭에서 감자를 캐 간다",
+                 "주차된 오토바이 시동을 걸어 몰고 간다", "주인 몰래 빵을 챙긴다", "돈을 내지 않고 물을 들고 간다",
+                 "밀수품을 나른다", "창고에 불을 질렀다"]:
+        assert crime_intent(text)[0] == "explicit", text
+    for text in ["모닥불에 불을 피운다", "마른 풀로 불을 지핀다", "배낭에서 물을 꺼내 마신다", "남의 도움을 받아 길을 찾는다",
+                 "감자를 캐 간다", "내 짐을 챙겨 떠난다", "가도 되는지 물어본다", "소리를 지른다", "몰래 다가가 살펴본다",
+                 "강가로 간다", "사기가 떨어진다"]:
+        assert crime_intent(text)[0] == "none", text
+    from survival.config import CRIMES
+    assert {"방화", "뇌물", "위조", "밀수"} <= set(CRIMES)
+
+
+def test_gains_need_an_honest_source(game, monkeypatch):
+    game.place_type = "마을"
+    game.begin_turn()
+    out = call(game, "update_inventory", remove=[], add=[{"name": "빵", "carryable": True}], source="stolen", giver="")
+    assert "error" in out and "빵" not in game.items                          # 판정 없이 훔친 것은 안 된다
+    out = call(game, "update_inventory", remove=[], add=[{"name": "빵", "carryable": True}], source="bought", giver="")
+    assert "error" in out                                                     # 값을 안 냈다
+    call(game, "pay", amount=2, purpose="빵")
+    assert "error" not in call(game, "update_inventory", remove=[], add=[{"name": "빵", "carryable": True}],
+                               source="bought", giver="")
+    out = call(game, "update_status", health=0, satiety=0, hydration=0, energy=0, money=100, money_source="stolen",
+               consumed_items=[], reason="지갑")
+    assert "error" in out and game.money == 48                                # 훔친 돈도 판정 없이는 안 된다
+
+    fix_roll(monkeypatch, 0.0)
+    game.begin_turn()
+    game.attempt("시장 상인의 빵을 훔친다", "normal", crime="절도", witnessed="bystanders", victim="시장 상인",
+                 success_items=["바게트"])
+    assert "바게트" in game.items and "바게트" in game.stolen_items          # 판정에 성공한 장물
+    out = call(game, "update_inventory", remove=[], add=[{"name": "사과", "carryable": True}], source="gift",
+               giver="시장 상인")
+    assert "원한" in out["error"]                                             # 피해자는 아무것도 주지 않는다
+
+
+def test_crime_aftermath_carries_forward(game, monkeypatch):
+    fix_roll(monkeypatch, 0.0)
+    game.place_type, game.place_name = "마을", "몽골, 어느 마을"
+    game.begin_turn()
+    game.add_character("아메드", "트럭 기사", "50대")
+    game.attempt("트럭 기사를 기절시킨다", "hard", crime="차량 절도", witnessed="bystanders", violent=True,
+                 victim="트럭 기사")
+    game.acquire_vehicle("truck", "화물 트럭")
+    assert game.notorious and game.enemies[0]["name"] == "아메드"
+    notes = game.crime_aftermath()
+    assert any("수배도" in n for n in notes) and any("현장" in n for n in notes) and any("훔친 것" in n for n in notes)
+    assert any("범죄자로 알려져" in n for n in notes)
+
+    game.end_turn(0.5)
+    game.begin_turn()                                                         # 다음 턴: 반드시 반응
+    assert game.event and "트럭 기사" in game.event["text"]
+    game.set_scene("indoor", "트럭 운전석", "Inside the truck cab.", ["운전대"])   # 장면이 바뀌어도
+    text = gamemaster.build_input(game, "숨을 고른다")
+    assert "[당신에게 원한이 있는 사람" in text and "아메드" in text and "[범죄의 여파" in text
+
+    game.pass_time(3, "rest")                                                 # 기절한 기사는 두어 시간 뒤 깨어난다
+    game.end_turn(0)
+    game.begin_turn()
+    assert "정신을 차리고" in game.event["text"]
+
+    game.begin_turn()
+    game.turn_flags["player_text"] = "트럭을 몰고 떠난다"
+    call(game, "travel", method="drive", distance_km=100)                    # 멀리 떠나면 현장·원한은 멀어진다
+    assert game.crime_scene is None and not game.enemies_nearby() and not game.notorious_here()
+    assert any("훔친 것" in n for n in game.crime_aftermath())               # 훔친 트럭은 여전히 여파로 남는다
+
+
+def test_notorious_town_reacts_and_does_not_help(game, monkeypatch):
+    game.place_type = "마을"
+    game.notorious = [{"place": "몽골", "lat": game.lat, "lon": game.lon, "crime": "강도", "turn": 1}]
+    fix_roll(monkeypatch, 0.0)
+    monkeypatch.setattr(state_module, "roll_major_event",
+                        lambda *a, **k: {"id": "korean", "text": "한국인이 초대한다", "accept": "초대를 받아들인다",
+                                         "move": {}, "stats": {}, "items": [], "money": 50, "hours": 1, "risk": "",
+                                         "bad": {"chance": 0}})
+    game.turn, game.last_major_turn = 20, 0
+    game.begin_turn()
+    assert game.offer is None and "알아보고" in game.event["text"]
+
+
+def test_arrest_confiscates_stolen_goods(game):
+    game.wanted = 40
+    game.items.append("훔친 시계")
+    game.stolen_items = ["훔친 시계"]
+    game.begin_turn()
+    game.arrest("검문")
+    assert "훔친 시계" not in game.items and game.stolen_items == []
