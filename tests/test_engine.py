@@ -551,7 +551,8 @@ def test_image_matches_declared_scene(game):
     game.set_scene("outdoor", "숲 가장자리", "A snowy forest edge with an abandoned log cabin by a frozen stream.",
                    ["버려진 오두막", "얼어붙은 개울"])
     prompt = imagegen.build_prompt(game)
-    assert "버려진 오두막" in prompt and "boreal conifer forest" in prompt and "winter" in prompt
+    assert "abandoned log cabin" in prompt and "boreal conifer forest" in prompt and "winter" in prompt
+    assert not imagegen.HANGUL.search(prompt)                # 그림 지시문에는 한글이 없다
     assert "Do NOT draw any building" in prompt            # 야생에서는 밝히지 않은 건물을 그리지 않는다
 
     game.scene_seen = ["버려진 오두막", "낡은 헛간"]        # Vision이 그림에서 추가로 발견한 것
@@ -1233,3 +1234,54 @@ def test_edit_keeps_composition(game):
     path = imagegen.edit_scene(client, game, prev.name)
     assert path and calls["prompt"] == imagegen.build_edit_prompt(game)
     assert imagegen.edit_scene(client, game, "/없는/파일.png") is None         # 실패하면 이전 그림 유지
+
+
+
+# ---------- 12차 수정: 그림 속 글자는 현지 언어로 ----------
+def test_image_prompt_has_no_hangul_and_uses_local_language(game):
+    game.place_name, game.place_name_en = "오스트레일리아, 노던 준주", "Australia, Northern Territory"
+    game.country_code, game.country_en = "au", "Australia"
+    game.set_scene("outdoor", "도로변 표지판 앞", "A red dirt road with a road sign, spinifex grass.",
+                   ["도로 표지판", "붉은 흙길"])
+    prompt = imagegen.build_prompt(game)
+    assert not imagegen.HANGUL.search(prompt)
+    assert "Australia, Northern Territory" in prompt and "written in English" in prompt and "Never use Korean" in prompt
+    edit = imagegen.build_edit_prompt(game)
+    assert not imagegen.HANGUL.search(edit) and "written in English" in edit
+
+    game.country_code, game.country_en, game.place_name_en = "mn", "Mongolia", ""
+    game.scene_desc = "A steppe with a 게르 and a sign."                   # GM이 실수로 한글을 섞어도
+    prompt = imagegen.build_prompt(game)
+    assert not imagegen.HANGUL.search(prompt) and "Mongolian (Cyrillic)" in prompt
+    assert "latitude 46.9, longitude 103.8" in prompt                    # 영어 지명이 없으면 좌표로
+
+
+def test_indoor_prompt_has_no_hangul(game):
+    game.country_code, game.country_en = "th", "Thailand"
+    game.set_scene("indoor", "한국 공관 영사과", "Inside a consular office: a counter and a Korean flag.", ["태극기"])
+    prompt = imagegen.build_prompt(game)
+    assert not imagegen.HANGUL.search(prompt) and "written in Thai" in prompt
+
+
+def test_reverse_geocode_returns_korean_and_english(monkeypatch):
+    answers = {"ko": {"address": {"country": "오스트레일리아", "state": "노던 준주", "country_code": "AU"}},
+               "en": {"address": {"country": "Australia", "state": "Northern Territory", "country_code": "AU"}}}
+
+    def fake_get(url, params=None, **kw):
+        return SimpleNamespace(json=lambda: answers[params["accept-language"]])
+
+    monkeypatch.setattr(geo.requests, "get", fake_get)
+    monkeypatch.setattr(geo.time, "sleep", lambda s: None)
+    place = geo.reverse_geocode(-23.7, 133.9)
+    assert place["name"] == "오스트레일리아, 노던 준주" and place["country_code"] == "au"
+    assert place["name_en"] == "Australia, Northern Territory" and place["country_en"] == "Australia"
+
+
+def test_every_city_country_has_a_sign_language():
+    from survival.languages import SIGN_LANGUAGE
+    assert {c["country"] for c in places.CITY_LIST} <= set(SIGN_LANGUAGE)
+
+
+def test_season_wording_fits_barren_climates():
+    assert climate.make_climate("desert", -23.9, 11)["season_en"] == "spring"
+    assert "green" in climate.make_climate("temperate", 37, 4)["season_en"]

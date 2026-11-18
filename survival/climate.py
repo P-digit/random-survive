@@ -62,8 +62,11 @@ def current_season(latitude, month, zone, monthly_precip=None):
 def make_climate(zone, latitude, month, monthly_temp=None, monthly_precip=None, source="기록"):
     label, label_en, biome = ZONES[zone]
     season = current_season(latitude, month, zone, monthly_precip)
+    season_en = SEASON_EN[season]
+    if zone in ("desert", "polar", "alpine"):
+        season_en = season_en.split(",")[0]       # 식생이 거의 없는 곳에 '푸른 새싹' 같은 묘사를 붙이지 않는다
     climate = {"zone": zone, "label": label, "label_en": label_en, "biome": biome,
-               "season": season, "season_en": SEASON_EN[season], "source": source}
+               "season": season, "season_en": season_en, "source": source}
     if monthly_temp:
         climate.update(t_ann=round(sum(monthly_temp) / 12, 1), t_cold=round(min(monthly_temp), 1),
                        t_warm=round(max(monthly_temp), 1), p_ann=round(sum(monthly_precip)))

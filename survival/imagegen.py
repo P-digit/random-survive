@@ -3,7 +3,10 @@ import base64
 import time
 
 from .config import IMAGE_MODEL, LLM_MODEL, OUTPUT_DIR
+import re
+
 from .events import BIOMES
+from .languages import sign_rule
 from .weather import weather_category
 
 # 날씨 분류별로 그림에 반드시 보여야 하는 요소
@@ -23,7 +26,28 @@ PLACE_EN = {"야생": "untouched wilderness",
             "도시": "on a street of a busy local city, shops and buildings nearby"}
 
 
+HANGUL = re.compile("[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]+")
+
+
+def no_hangul(text):
+    """그림 지시문에서 한글을 지운다. 한글이 있으면 이미지 모델이 표지판에 엉터리 한글을 그린다."""
+    text = HANGUL.sub("", text or "")
+    text = re.sub(r"\(\s*\)|\[\s*\]", "", text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def region_of(state):
+    """그림 지시문에 쓰는 지역 이름(영어). 영어 지명이 없으면 좌표와 나라만."""
+    name = no_hangul(state.place_name_en) or no_hangul(state.country_en)
+    coords = f"latitude {state.lat}, longitude {state.lon}"
+    return f"{name} ({coords})" if name else coords
+
+
 def build_prompt(state):
+    return no_hangul(_build_prompt(state))
+
+
+def _build_prompt(state):
     w = state.weather
     time_of_day = light_of(state)
     category = weather_category(w.get("code", 0))
@@ -32,20 +56,20 @@ def build_prompt(state):
         visuals += " Strong wind: vegetation bending hard, dust, sand or snow blowing through the air."
     weather_line = (f"IMPORTANT, the weather must be clearly noticeable. {visuals} " if visuals else "")
     no_list = ("The frame contains only the place itself: no hands, no arms, no held objects, "
-               "no weapons, no guns, no people, no characters, no game HUD, no text, no watermark.")
-    region = f"{state.place_name} (latitude {state.lat}, longitude {state.lon})"
+               "no weapons, no guns, no people, no characters, no game HUD, no captions, no watermark.")
+    region = region_of(state)
+    signs = sign_rule(state.country_code, state.country_en)
     climate = state.climate or {}
     climate_line = (f"Climate: {climate['label_en']}. Season: {climate['season_en']}. "
                     "Ground, vegetation and colors must match this climate and season exactly. "
                     if climate else "")
-    # 그림에는 GM이 밝힌 것만 그린다 → 그림에만 있고 게임에는 없는 건물이 생기지 않게 한다
-    features = ", ".join(state.scene_features)
-    only_line = (f"Clearly show these and make each one recognizable: {features}. " if features else "")
+    # 그림에는 GM이 밝힌 것만 그린다 → 그림에만 있고 게임에는 없는 건물이 생기지 않게 한다.
+    # (보이는 것 목록은 한국어라 넣지 않는다. GM의 영어 묘사(scene_desc)에 모두 들어 있다)
     if state.place_type == "야생" and not state.indoor:
-        only_line += ("Do NOT draw any building, hut, house, road, vehicle, fence or other man-made structure "
-                      "unless it is named above. ")
+        only_line = ("Do NOT draw any building, hut, house, road, vehicle, fence or other man-made structure "
+                     "unless it is described above. ")
     else:
-        only_line += "Do not add prominent landmarks or vehicles that are not named above. "
+        only_line = "Do not add prominent landmarks or vehicles that are not described above. "
 
     if state.indoor:
         # 실내 장면: GM이 묘사한 공간을 그리고, 날씨는 창문·문틈 너머로 보이게 한다
@@ -57,7 +81,7 @@ def build_prompt(state):
             f"The building is in {region}; {climate_line}"
             "furniture, materials and architecture authentic to that region. "
             f"Through the window or doorway: {outside}, {w['temperature']:.0f} degrees Celsius outside, {time_of_day}. "
-            "Dim natural light, highly detailed. " + no_list
+            "Dim natural light, highly detailed. " + signs + no_list
         )
 
     focus = f"Scene: {state.scene_desc} " if state.scene_desc else ""
@@ -68,7 +92,7 @@ def build_prompt(state):
         f"Weather: {w['description_en']}, {w['temperature']:.0f} degrees Celsius, {time_of_day}. "
         + weather_line
         + "Eye-level view, moody atmospheric lighting, highly detailed, "
-        "architecture authentic to the region. " + no_list
+        "architecture authentic to the region. " + signs + no_list
     )
 
 
@@ -121,10 +145,10 @@ def build_edit_prompt(state):
                   f"outside the windows: {visuals}")
     else:
         change = f"Change only the lighting and sky to: {light_of(state)}. Weather: {visuals}"
-    return ("Edit this image. It is the same place a few hours later. Keep the exact same camera angle, "
-            "composition, landscape, buildings, room layout, furniture, objects and every person exactly as they are; "
-            "do not add, remove or replace anything. " + change +
-            " No text, no watermark.")
+    return no_hangul("Edit this image. It is the same place a few hours later. Keep the exact same camera angle, "
+                     "composition, landscape, buildings, room layout, furniture, objects, signs and every person "
+                     "exactly as they are; do not add, remove or replace anything. " + change + " "
+                     + sign_rule(state.country_code, state.country_en) + "No captions, no watermark.")
 
 
 def _save(b64):

@@ -224,7 +224,8 @@ TOOLS = [
             "place": {"type": "string", "description": "장소의 짧은 한국어 이름. 예: '빈 오두막 안', '강가', '버스 터미널 대합실'. "
                                                        "같은 곳이면 이전과 똑같은 이름을 쓴다."},
             "description_en": {"type": "string",
-                               "description": "그 장소에서 눈에 보이는 풍경을 영어로 2~3문장 묘사(그림 생성용). "
+                               "description": "그 장소에서 눈에 보이는 풍경을 영어로만 2~3문장 묘사(그림 생성용, 한글 금지). "
+                                              "표지판·간판이 있다면 그 나라 언어로 쓰여 있다고 적는다. "
                                               "그 지역의 기후·계절·식생에 맞게, visible_features 를 모두 포함해서 쓴다. "
                                               "사물·구조·빛 위주로, 사람은 묘사하지 않는다. "
                                               "예: 'Inside a small abandoned log cabin, a rusty iron stove, "

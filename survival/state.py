@@ -102,7 +102,9 @@ class GameState:
     notices: list = field(default_factory=list)          # 이번 턴의 중요 알림 (대화창 표시용)
     tickets: list = field(default_factory=list)          # 예약(결제)해 둔 교통편. 탈 때까지 계속 기억한다
     vehicle: dict | None = None       # 손에 넣은 탈것 (탈취, 구매 등)
-    country_code: str = ""            # 지금 있는 나라 (가까운 공관 찾기용)
+    country_code: str = ""            # 지금 있는 나라 (가까운 공관 찾기용, 표지판 언어)
+    place_name_en: str = ""           # 영어 지명 (그림 지시문용. 그림에 한글이 들어가지 않게)
+    country_en: str = ""
     # 이야기의 개연성: 아직 확인하지 않은 단서와, 이미 확정된 사실
     leads: list = field(default_factory=list)            # [{id, kind, label, clue, target, km, bearing, ...}]
     lead_seq: int = 0
@@ -728,6 +730,7 @@ class GameState:
         if self.distance <= ARRIVAL_RADIUS_KM:
             self.distance = 0.0
             self.place_name, self.place_type = "대한민국, 서울", "도시"
+            self.place_name_en, self.country_en, self.country_code = "South Korea, Seoul", "South Korea", "kr"
             self.scene_dirty = True
             if self.status == "playing":
                 self.status = "won"
@@ -971,7 +974,7 @@ class GameState:
             country = self.place_name.split(",")[0] if self.place_name else ""
             self.place_name = f"{country}, {dest['name']}" if country and country != dest["name"] else dest["name"]
             self.set_scene("outdoor", f"{dest['name']} 시내",
-                           f"A street in the city of {dest['name']}: local shops, traffic and a bus terminal.",
+                           "A busy street in this city: local shops, traffic and a bus terminal.",
                            ["시내 거리", "버스 터미널", "상점들"])
             story = f"{dest['name']}에 도착했다. 사람과 차가 붐비는 도시다."
         self.remember(f"{dest['label']}에 도착했다.", "always")
@@ -1149,6 +1152,8 @@ class GameState:
         place = geo.reverse_geocode(self.lat, self.lon)
         self.place_name = place["name"] if place else "이름 모를 땅"
         self.country_code = (place or {}).get("country_code", "") or self.country_code
+        self.place_name_en = (place or {}).get("name_en", "")
+        self.country_en = (place or {}).get("country_en", "") or self.country_en
         self.refresh_climate()
         self.biome = classify_biome(self.lat, self.weather, self.climate)
         roll = random.random()
@@ -1275,6 +1280,8 @@ def create_game():
         start_distance=distance, distance=distance,
     )
     state.country_code = (place or {}).get("country_code", "")
+    state.place_name_en = (place or {}).get("name_en", "")
+    state.country_en = (place or {}).get("country_en", "")
     state.set_weather(weather)
     state.refresh_climate()
     state.biome = classify_biome(lat, state.weather, state.climate)
