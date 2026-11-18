@@ -1033,40 +1033,106 @@ def test_ride_offers_go_to_real_places_not_just_toward_korea(game):
     assert offer["dest"]["place"] == "마을" and 30 <= offer["dest"]["km"] <= 120
 
 
-def test_embassy_then_airport_flow(game):
-    game.place_type, game.country_code = "야생", "mn"
+def test_embassy_then_airport_flow(game, monkeypatch):
+    """마을에서 공관으로 → 귀국 지원 → 공항 → 귀국. 플레이어가 원하면 턴마다 바로 진행된다."""
+    monkeypatch.setattr(state_module.random, "random", lambda: 0.99)   # 기회의 나쁜 결과가 나오지 않게
+    game.place_type, game.country_code, game.money = "마을", "mn", 30
     game.begin_turn()
-    assert call(game, "seek_help", kind="embassy")["success"] is False      # 야생에서는 연락할 방법이 없다
-    game.flags["can_call"] = True                                            # 신호가 잡히는 언덕에 올랐다
-    out = call(game, "seek_help", kind="embassy")
-    assert out["success"] and "울란바토르의 대한민국 대사관" in game.offer["text"]
-
-    game.place_type = "도시"
-    assert call(game, "seek_help", kind="airport")["success"] is False       # 1일차·공관 전에는 공항 불가
-    game.money = 3000
-    game.flags["at_airport"] = False
-    assert game.travel("flight", 1)["success"] is False                      # 비행기도 탈 수 없다
-
-    random.seed(3)
-    state_module.random.seed(3)
-    game.offer["turn"] = game.turn
-    game.begin_turn()
-    game.offer["bad"]["chance"] = 0
-    out = call(game, "accept_offer")
-    assert out["success"] and game.flags["embassy_visited"] and "여행증명서" in game.items
-    assert game.indoor and "공관" in game.scene_place and game.place_type == "도시"
+    out = call(game, "go_to", target="embassy")                              # 1턴: 공관이 교통편 마련, 바로 이동
+    assert out["success"] and game.flags["embassy_visited"] and game.flags["at_embassy"]
+    assert "울란바토르" in game.place_name and game.indoor and "공관" in game.scene_place
+    assert "여행증명서" in game.items and game.place_type == "도시"
     assert any(f["scope"] == "always" and "영사 지원" in f["text"] for f in game.facts)
 
+    game.begin_turn()                                                        # 2턴: 귀국 지원
+    money = game.money
+    out = call(game, "seek_help", kind="repatriation")
+    assert out["success"] and game.find_ticket("flight") and game.money == money    # 소지금은 그대로
+    assert any(n["title"].startswith("🎫 귀국 항공권") for n in gamemaster.collect_notices(game))
+
+    game.begin_turn()                                                        # 3턴: 공항으로
+    out = call(game, "go_to", target="airport")
+    assert out["success"] and game.flags["at_airport"] and "공항" in game.scene_place
+
+    game.begin_turn()                                                        # 4턴: 탑승
+    out = call(game, "travel", method="flight", distance_km=1)
+    assert out["arrived_in_korea"] and game.status == "won" and game.money == money
+
+
+def test_no_teleport_from_the_wild(game, monkeypatch):
+    """오지에서 공관을 찾아도 공관에 순간이동하지 않는다. 전화가 되면 통화만 하고, 먼저 마을로 간다."""
+    game.biome, game.place_type, game.country_code = "snow", "야생", "mn"
     game.begin_turn()
-    out = call(game, "seek_help", kind="airport")                            # 공관을 다녀왔으니 이제 공항 가능
-    assert out["success"] and "국제공항" in game.offer["text"]
-    game.offer["bad"]["chance"] = 0
-    game.offer["turn"] = game.turn
+    start = (game.lat, game.lon)
+    out = call(game, "go_to", target="embassy")
+    assert out["success"] and "연락할 방법이 없다" in out["message"]
+    assert not game.flags.get("embassy_visited") and game.place_type in ("야생", "마을")
+    assert game.journey is None or game.journey["type"] == "village"
+    moved = geo.haversine_km(*start, game.lat, game.lon)
+    assert 0 < moved <= 2.5 * 10 + 0.5                                       # 설원 도보 2.5km/h × 최대 10시간
+
+    game2 = GameState(lat=46.9, lon=103.8, place_name="몽골", weather=fake_weather(), biome="forest",
+                      distance=geo.distance_to_korea(46.9, 103.8), country_code="mn")
+    game2.flags["can_call"] = True                                           # 신호가 잡히는 언덕
+    game2.begin_turn()
+    out = game2.go_to("embassy")
+    assert "통화" in out["message"] and game2.flags["embassy_contacted"] and not game2.flags.get("embassy_visited")
+    assert any("교통편을 마련" in f["text"] for f in game2.facts)
+
+
+def test_long_walk_takes_several_turns(game, monkeypatch):
+    game.biome, game.place_type = "snow", "야생"
+    monkeypatch.setattr(state_module.random, "uniform", lambda a, b: b if b > 50 else 0)   # 마을까지 70km, 정면 방향
     game.begin_turn()
-    call(game, "accept_offer")
-    assert game.flags["at_airport"] and "공항" in game.scene_place
+    out = call(game, "go_to", target="village")
+    assert out["도착"] is False and game.journey and game.place_type == "야생"
+    assert "[현재 상태]" in gamemaster.build_input(game, "계속 간다") and "진행_중인_여정" in gamemaster.build_input(game, "x")
+    assert "error" in call(game, "go_to", target="continue")               # 한 턴에 한 번
+    for _ in range(4):
+        game.health = game.satiety = game.hydration = game.energy = 100
+        game.begin_turn()
+        out = call(game, "go_to", target="continue")
+        if out.get("도착"):
+            break
+    assert out["도착"] and game.place_type == "마을" and game.journey is None and "마을" in game.scene_place
+
+
+def test_village_uses_known_lead(game, monkeypatch):
     game.begin_turn()
-    assert call(game, "travel", method="flight", distance_km=1)["arrived_in_korea"]
+    lead = game.add_lead("settlement", "계곡 아래 마을 지붕")
+    assert lead["target"] == "village"
+    game.turn_flags["travel"] = 0
+    out = call(game, "go_to", target="village")
+    assert out["success"] and game.place_type == "마을" and not game.leads    # 알고 있는 마을로 간다
+
+
+def test_city_trip_by_bus_and_airport_needs_a_city(game, monkeypatch):
+    game.place_type, game.money = "마을", 100
+    game.begin_turn()
+    out = call(game, "go_to", target="airport")                              # 마을에서 공항 → 먼저 도시로
+    assert "먼저 도시로" in out["message"] and out["수단"] == "버스" and game.money < 100
+    assert out["도착"] and game.place_type == "도시" and "울란바토르" in game.place_name
+
+    broke = GameState(lat=46.9, lon=103.8, place_name="몽골", weather=fake_weather(), biome="forest",
+                      place_type="마을", money=0, distance=geo.distance_to_korea(46.9, 103.8))
+    monkeypatch.setattr(state_module.random, "random", lambda: 0.99)          # 차비가 없으면 히치하이킹, 실패
+    broke.begin_turn()
+    assert "태워 주는 차가 없었다" in broke.go_to("city")["message"]
+
+
+def test_drive_to_city_with_vehicle(game):
+    game.vehicle = {"kind": "truck", "name": "트럭", "speed": 60, "range_km": 700, "sea": False, "stolen": False}
+    game.begin_turn()
+    out = call(game, "go_to", target="city")
+    assert out["수단"] == "트럭" and out["도착"] and game.place_type == "도시" and game.vehicle["range_km"] < 700
+
+
+def test_airport_blocked_early_without_embassy(game):
+    game.place_type, game.money = "도시", 3000
+    game.begin_turn()
+    assert call(game, "go_to", target="airport")["success"] is False         # 1일차·공관 전에는 공항 불가
+    assert game.travel("flight", 1)["success"] is False                      # 비행기도 탈 수 없다
+    assert call(game, "seek_help", kind="repatriation")["success"] is False  # 공관 밖에서는 귀국 지원 불가
 
 
 def test_airport_opens_after_enough_days(game):
@@ -1085,3 +1151,85 @@ def test_city_data_is_sane():
     near = places.nearest_city(-23.9, 133.5)
     assert near["name"] == "앨리스스프링스" and near["km"] < 50
     assert places.nearest_city(20.0, 0.0, max_km=100) is None
+
+
+
+# ---------- 11차 수정: 같은 장소·같은 사람 / 귀국을 끌지 않기 ----------
+def test_same_place_keeps_description_and_people(game):
+    game.set_scene("indoor", "한국 공관 영사과", "Inside a consular office with a counter and a Korean flag.",
+                   ["민원 창구", "태극기"])
+    game.scene_dirty = False
+    first_desc = game.scene_desc
+    assert game.add_character("김민수 영사", "영사과 담당 영사", "40대, 회색 양복, 안경")["look"] == "40대, 회색 양복, 안경"
+    # 같은 곳을 다른 말로 다시 설정해도 묘사·그림·인물은 그대로
+    assert call(game, "set_scene", setting="indoor", place="영사과 창구",
+                description_en="A totally different modern lobby.", visible_features=["대기 번호표"])["장면이_바뀜"] is False
+    assert game.scene_desc == first_desc and not game.scene_dirty and game.scene_place == "한국 공관 영사과"
+    assert "대기 번호표" in game.scene_features                              # 새로 보이는 것은 덧붙인다
+    person = game.add_character("박 영사", "영사과 담당 영사", "20대, 청바지")  # 같은 역할 → 같은 사람
+    assert person["name"] == "김민수 영사" and len(game.characters) == 1
+    text = gamemaster.build_input(game, "영사에게 묻는다")
+    assert "[등장인물" in text and "김민수 영사" in text and "[지금 장면" in text
+
+    assert call(game, "set_scene", setting="outdoor", place="공관 앞 거리",
+                description_en="A city street.", visible_features=[])["장면이_바뀜"]    # 밖으로 나가면 바뀐다
+    assert game.scene_dirty and game.characters == [] and not game.flags.get("at_embassy")
+
+
+def test_night_does_not_change_the_scene(game):
+    game.set_scene("outdoor", "강가", "A riverbank.", ["강"])
+    game.scene_dirty = False
+    game.begin_turn()
+    game.pass_time(10, "rest")
+    game.end_turn(0)
+    assert not game.scene_dirty                                              # 낮밤이 바뀌어도 장면은 그대로
+
+
+def load_app(monkeypatch):
+    import importlib
+    from unittest.mock import MagicMock
+    fake = MagicMock()
+    fake.update = lambda **k: k
+    monkeypatch.setitem(sys.modules, "gradio", fake)
+    sys.modules.pop("app", None)
+    return importlib.import_module("app")
+
+
+def test_image_update_modes(game, monkeypatch):
+    app = load_app(monkeypatch)
+    game.set_scene("outdoor", "강가", "A riverbank.", ["강"])
+    assert app.image_update(game) == "new"                                   # 처음
+    game.image_path, game.scene_dirty = "/tmp/a.png", False
+    game.image_scene, game.image_night = app.scene_key(game), game.is_night
+    game.image_weather = imagegen.weather_category(game.weather.get("code", 0))
+    assert app.image_update(game) is None                                    # 그대로
+    game.image_night = not game.is_night
+    assert app.image_update(game) == "edit"                                  # 야외의 낮밤 변화 → 편집
+    game.set_scene("indoor", "어부 오두막 안", "Inside a hut.", ["난로"])
+    assert app.image_update(game) == "new"                                   # 장면이 바뀌면 새로
+    game.scene_dirty, game.image_scene = False, app.scene_key(game)
+    game.image_night = not game.is_night
+    assert app.image_update(game) is None                                    # 실내는 낮밤으로 다시 그리지 않는다
+
+
+def test_edit_keeps_composition(game):
+    game.weather.update(code=63)
+    game.start_hour, game.elapsed_hours = 6, 0
+    prompt = imagegen.build_edit_prompt(game)
+    assert "Keep the exact same camera angle" in prompt and "every person" in prompt
+    assert "dawn" in prompt and "raining" in prompt
+    calls = {}
+
+    def fake_edit(**kw):
+        calls.update(kw)
+        import base64
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(b"png").decode())])
+
+    client = SimpleNamespace(images=SimpleNamespace(edit=fake_edit))
+    import tempfile
+    prev = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    prev.write(b"old")
+    prev.close()
+    path = imagegen.edit_scene(client, game, prev.name)
+    assert path and calls["prompt"] == imagegen.build_edit_prompt(game)
+    assert imagegen.edit_scene(client, game, "/없는/파일.png") is None         # 실패하면 이전 그림 유지

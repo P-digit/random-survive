@@ -148,10 +148,31 @@ TOOLS = [
         },
     ),
     _function(
+        "go_to",
+        "플레이어가 목적지를 정해 가려 할 때 호출한다. 엔진이 지금 있는 곳과 가진 수단(걷기, 탈것, 버스, 기차, 돈)으로 "
+        "현실적으로 갈 수 있는 만큼만 이동시킨다. 곧장 갈 수 없는 곳이면 먼저 갈 수 있는 곳부터 간다"
+        "(야생에서 공관을 찾으면 먼저 가장 가까운 마을로, 마을에서 공항을 찾으면 먼저 도시로). "
+        "한 턴에 다 못 가면 중간 지점에서 멈추고, 다음 턴에 플레이어가 계속 가겠다고 하면 target='continue'. "
+        "이때는 advance_time, travel 을 따로 호출하지 않는다.",
+        {"target": {"type": "string", "enum": ["village", "city", "embassy", "airport", "continue"],
+                    "description": "village 가장 가까운 마을, city 가장 가까운 도시, embassy 한국 공관, "
+                                   "airport 국제공항, continue 진행 중인 여정을 이어 감"}},
+    ),
+    _function(
         "seek_help",
-        "플레이어가 직접 한국 공관(대사관·영사관)에 연락하거나 공항으로 가려 할 때 호출한다. 조건이 되면 엔진이 "
-        "실제 위치의 가장 가까운 공관·공항으로 가는 기회를 만든다. 조건이 안 되면 이유를 돌려준다(그대로 서술한다).",
-        {"kind": {"type": "string", "enum": ["embassy", "airport"], "description": "embassy 공관, airport 공항"}},
+        "공관 안에서 플레이어가 한국으로 돌아가고 싶다고 할 때 호출한다. 가족 송금(신속해외송금)으로 한국행 "
+        "항공권이 마련된다. (공관·공항으로 가는 것은 go_to 를 쓴다)",
+        {"kind": {"type": "string", "enum": ["repatriation"], "description": "repatriation 귀국 항공권 지원"}},
+    ),
+    _function(
+        "add_character",
+        "이 장소에서 이름이나 역할이 있는 인물을 처음 등장시킬 때 호출한다(영사, 여관 주인, 트럭 기사 등). "
+        "이미 [등장인물]에 있는 사람은 다시 만들지 말고 같은 이름·역할·생김새로 계속 등장시킨다.",
+        {
+            "name": {"type": "string", "description": "이름 또는 부르는 말. 예: '김민수 영사', '여관 주인 아흐메드'"},
+            "role": {"type": "string", "description": "역할. 예: '영사과 담당 영사'"},
+            "look": {"type": "string", "description": "겉모습 한 줄. 예: '40대, 회색 양복, 안경'"},
+        },
     ),
     _function(
         "pay",
@@ -249,7 +270,7 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
-        elif name in ("advance_time", "travel", "follow_lead") and state.turn_flags.get("travel", 0) >= 1:
+        elif name in ("advance_time", "travel", "follow_lead", "go_to") and state.turn_flags.get("travel", 0) >= 1:
             result = {"error": "이번 턴에는 이미 이동했다. 한 턴에는 플레이어가 지시한 행동 하나만 처리한다. "
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
@@ -268,8 +289,13 @@ def execute_tool(state, name, arguments, client=None):
         elif name == "remember":
             state.remember(str(args.get("fact", "")), str(args.get("scope", "here")))
             result = {"ok": True}
+        elif name == "go_to":
+            result = state.go_to(str(args.get("target", "")))
         elif name == "seek_help":
             result = state.seek_help(str(args.get("kind", "")))
+        elif name == "add_character":
+            person = state.add_character(args.get("name", ""), args.get("role", ""), args.get("look", ""))
+            result = {"ok": True, "인물": person} if person else {"error": "이름이 필요하다"}
         elif name == "pay":
             result = state.pay(args.get("amount", 0), str(args.get("purpose", "")))
         elif name == "acquire_vehicle":

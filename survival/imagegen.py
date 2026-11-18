@@ -25,7 +25,7 @@ PLACE_EN = {"야생": "untouched wilderness",
 
 def build_prompt(state):
     w = state.weather
-    time_of_day = "at night, dark sky" if state.is_night else "in daylight"
+    time_of_day = light_of(state)
     category = weather_category(w.get("code", 0))
     visuals = WEATHER_VISUALS[category]
     if w["wind_speed"] >= 40:
@@ -99,6 +99,60 @@ def describe_image(client, path):
         return []
 
 
+def light_of(state):
+    """시각에 따른 빛. 새벽·낮·해 질 녘·밤."""
+    h = state.hour
+    if 5 <= h < 7:
+        return "at dawn, soft pale light, the sky turning orange at the horizon"
+    if 7 <= h < 17:
+        return "in daylight"
+    if 17 <= h < 20:
+        return "at dusk, warm low sunlight and long shadows"
+    return "at night, dark sky, only faint natural or artificial light"
+
+
+def build_edit_prompt(state):
+    """같은 장면에서 시간·날씨만 바뀌었을 때, 이전 그림을 고치는 지시문."""
+    w = state.weather
+    category = weather_category(w.get("code", 0))
+    visuals = WEATHER_VISUALS[category] or "Clear weather, no rain or snow."
+    if state.indoor:
+        change = (f"Change only the light coming through the windows to match: {light_of(state)}; "
+                  f"outside the windows: {visuals}")
+    else:
+        change = f"Change only the lighting and sky to: {light_of(state)}. Weather: {visuals}"
+    return ("Edit this image. It is the same place a few hours later. Keep the exact same camera angle, "
+            "composition, landscape, buildings, room layout, furniture, objects and every person exactly as they are; "
+            "do not add, remove or replace anything. " + change +
+            " No text, no watermark.")
+
+
+def _save(b64):
+    image_bytes = base64.b64decode(b64)   # Base64 → 이미지
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    path = OUTPUT_DIR / f"scene_{int(time.time() * 1000)}.png"
+    with open(path, "wb") as f:
+        f.write(image_bytes)
+    return str(path)
+
+
+def edit_scene(client, state, previous_path):
+    """같은 장면을 유지한 채 빛·날씨만 바꾼 그림을 만든다 (Images API edit). 실패하면 None."""
+    try:
+        with open(previous_path, "rb") as image:
+            result = client.images.edit(
+                model=IMAGE_MODEL,
+                image=image,
+                prompt=build_edit_prompt(state),
+                size="1536x1024",
+                quality="low",
+            )
+        return _save(result.data[0].b64_json)
+    except Exception as e:
+        print(f"[이미지] 편집 실패, 새로 그리지 않고 이전 그림을 유지합니다: {e}")
+        return None
+
+
 def generate_scene(client, state):
     """장면 이미지를 생성해 파일로 저장하고 경로를 반환한다. 실패하면 None."""
     try:
@@ -108,12 +162,7 @@ def generate_scene(client, state):
             size="1536x1024",
             quality="low",   # 비용 절약
         )
-        image_bytes = base64.b64decode(result.data[0].b64_json)   # Base64 → 이미지
-        OUTPUT_DIR.mkdir(exist_ok=True)
-        path = OUTPUT_DIR / f"scene_{int(time.time() * 1000)}.png"
-        with open(path, "wb") as f:
-            f.write(image_bytes)
-        return str(path)
+        return _save(result.data[0].b64_json)
     except Exception as e:
         print(f"[이미지] 생성 실패: {e}")
         return None

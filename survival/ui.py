@@ -1,6 +1,7 @@
 """화면 꾸미기: CSS와 HUD(상태창) HTML 생성."""
 from html import escape
 
+from . import geo
 from .config import TRAVEL_RULES
 
 CSS = """
@@ -289,7 +290,11 @@ def render_hud(state):
         f'<div class="dist">{state.distance:,.0f} <small>km 남음</small>'
         f'{_delta(d.get("distance", 0), inline=True, good_when_up=False, unit="km")}</div>'
         f'<div class="bar" style="margin:8px 0 6px"><i style="width:{max(2, progress):.0f}%;background:var(--amber)"></i></div>'
-        f'<div class="route"><span>출발 {state.start_distance:,.0f}km</span><span>🇰🇷 서울</span></div></div>'
+        f'<div class="route"><span>출발 {state.start_distance:,.0f}km</span><span>🇰🇷 서울</span></div>'
+        + (f'<div class="hazard" style="margin-top:6px">🚶 <b>{escape(state.journey["label"])}</b>(으)로 가는 중 · '
+           f'약 {geo.haversine_km(state.lat, state.lon, state.journey["lat"], state.journey["lon"]):,.0f}km 남음</div>'
+           if state.journey else "")
+        + '</div>'
     )
 
     # 신체 수치

@@ -83,6 +83,12 @@ WANTED_DECAY_PER_HOUR = 0.3
 DIURNAL_AMPLITUDE = {"desert": 11, "alpine": 8, "savanna": 7, "snow": 5, "forest": 5, "jungle": 4}
 WANTED_AIRPORT_LIMIT = 50    # 이 이상이면 공항·항구 검문에서 붙잡힐 수 있다
 
+# --- 목적지로 가기 (go_to) ---
+JOURNEY_MAX_HOURS = 10        # 한 턴에 이동하는 최대 시간. 더 걸리면 중간에서 멈추고 다음 턴에 이어 간다
+# 야생에서 가장 가까운 마을까지의 거리(km) 범위. 극한 지형일수록 멀다
+VILLAGE_DISTANCE = {"snow": (25, 70), "desert": (25, 80), "alpine": (15, 45),
+                    "jungle": (10, 40), "savanna": (8, 30), "forest": (5, 25)}
+
 # 대형 이벤트(기회): 매 턴 발생 확률과, 이 턴 수만큼 안 나오면 반드시 나오게 하는 보정
 MAJOR_EVENT_CHANCE = 0.10
 MAJOR_EVENT_PITY_TURNS = 8
