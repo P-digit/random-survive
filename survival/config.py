@@ -83,6 +83,14 @@ WANTED_DECAY_PER_HOUR = 0.3
 DIURNAL_AMPLITUDE = {"desert": 11, "alpine": 8, "savanna": 7, "snow": 5, "forest": 5, "jungle": 4}
 WANTED_AIRPORT_LIMIT = 50    # 이 이상이면 공항·항구 검문에서 붙잡힐 수 있다
 
+# --- 돈 ---
+MONEY_GAIN_LIMIT = 600        # 한 번에 얻을 수 있는 돈의 상한(USD). 지갑을 훔치거나 일당을 받는 정도
+
+# --- 초반 제한 ---
+# 게임 시작 후 이 시간 동안은 도시·공항·공관으로 갈 수 없다. 낙하 지점 근처(마을까지)에서 버텨야 한다
+EARLY_GAME_HOURS = 36
+EARLY_MAX_TRAVEL_KM = 60      # 초반에 한 번에 이동할 수 있는 최대 거리
+
 # --- 목적지로 가기 (go_to) ---
 JOURNEY_MAX_HOURS = 10        # 한 턴에 이동하는 최대 시간. 더 걸리면 중간에서 멈추고 다음 턴에 이어 간다
 # 야생에서 가장 가까운 마을까지의 거리(km) 범위. 극한 지형일수록 멀다

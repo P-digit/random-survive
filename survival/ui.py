@@ -2,7 +2,7 @@
 from html import escape
 
 from . import geo
-from .config import TRAVEL_RULES
+from .config import EARLY_GAME_HOURS, TRAVEL_RULES
 
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=IBM+Plex+Sans+KR:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap');
@@ -291,6 +291,9 @@ def render_hud(state):
         f'{_delta(d.get("distance", 0), inline=True, good_when_up=False, unit="km")}</div>'
         f'<div class="bar" style="margin:8px 0 6px"><i style="width:{max(2, progress):.0f}%;background:var(--amber)"></i></div>'
         f'<div class="route"><span>출발 {state.start_distance:,.0f}km</span><span>🇰🇷 서울</span></div>'
+        + (f'<div class="hazard" style="margin-top:6px">🧭 초반 탐색 중 · 약 '
+           f'{max(1, round(EARLY_GAME_HOURS - state.elapsed_hours))}시간 뒤부터 도시·공항·공관으로 갈 수 있음</div>'
+           if state.early and state.status == "playing" else "")
         + (f'<div class="hazard" style="margin-top:6px">🚶 <b>{escape(state.journey["label"])}</b>(으)로 가는 중 · '
            f'약 {geo.haversine_km(state.lat, state.lon, state.journey["lat"], state.journey["lon"]):,.0f}km 남음</div>'
            if state.journey else "")

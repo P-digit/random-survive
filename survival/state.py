@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from . import climate as climate_api
 from . import geo, leads as leads_api, places
 from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CRIMES,
+                     EARLY_GAME_HOURS, EARLY_MAX_TRAVEL_KM, MONEY_GAIN_LIMIT,
                      JOURNEY_MAX_HOURS, VILLAGE_DISTANCE,
                      DIURNAL_AMPLITUDE, LAND_METHODS, WITNESS,
                      MAJOR_EVENT_CHANCE, VEHICLES, WANTED_AIRPORT_LIMIT, WANTED_DECAY_PER_HOUR,
@@ -27,6 +28,10 @@ def clamp(value, low=0.0, high=100.0):
 NOT_CARRYABLE = ("오두막", "건물", "동굴", "쉘터", "움막", "대피소", "오아시스", "개울", "호수",
                  "우물", "물줄기", "웅덩이", "모닥불", "마을", "도시", "자동차", "트럭", "헬기",
                  "나룻배", "화물선", "야자수", "과일나무", "발자국", "임도", "도로", "신호")
+# 탈것과 큰 동물: 소지품이 아니라 acquire_vehicle 로 얻는다
+VEHICLE_WORDS = ("차량", "승용차", "자동차", "트럭", "픽업", "지프", "밴", "버스", "택시", "오토바이", "스쿠터",
+                 "자전거", "보트", "카누", "카약", "뗏목", "요트", "트랙터", "헬기", "헬리콥터", "비행기",
+                 "나룻배", "화물선", "설상차", "썰매", "말 한 마리", "낙타", "당나귀", "노새", "야크")
 IMPOSSIBLE = ("텔레포트", "순간이동", "마법", "타임머신", "워프", "포탈", "요술", "초능력",
               "제트팩", "광선", "무한", "소원", "투명", "부활", "치트")
 
@@ -40,6 +45,10 @@ def item_problem(name):
         return "교통편 표는 buy_ticket 으로만 구매할 수 있음"
     if any(word in name for word in IMPOSSIBLE):
         return "현실에 존재하지 않는 물건"
+    if any(k in name for k in ("열쇠", "키", "모형", "장난감", "사진", "그림", "부품")):
+        return None                  # '트럭 열쇠', '배 모형'처럼 탈것·장소 이름이 들어간 작은 물건
+    if any(word in name for word in VEHICLE_WORDS):
+        return "탈것은 소지품이 아님 — 탈것을 얻었다면 acquire_vehicle 로 처리"
     if any(word in name for word in NOT_CARRYABLE):
         return "들고 다닐 수 없는 장소·지형·탈것"
     return None
@@ -130,6 +139,16 @@ class GameState:
     @property
     def is_night(self):
         return self.hour < 6 or self.hour >= 20
+
+    @property
+    def early(self):
+        """게임 초반: 아직 도시·공항·공관으로 갈 수 없다."""
+        return self.elapsed_hours < EARLY_GAME_HOURS
+
+    def early_message(self):
+        left = max(1, round(EARLY_GAME_HOURS - self.elapsed_hours))
+        return (f"아직 이 지역을 벗어날 방법을 찾지 못했다. 앞으로 약 {left}시간은 근처(마을까지)에서 버티며 "
+                "길과 사람, 여비를 찾아야 한다.")
 
     @property
     def biome_name(self):
@@ -334,9 +353,11 @@ class GameState:
         self.hydration = clamp(self.hydration + clamp(hydration, -40, 60))
         self.energy = clamp(self.energy + clamp(energy, -40, 40))
         before = self.money
-        self.money = round(max(0.0, self.money + clamp(money, -100000, 120)), 2)
+        self.money = round(max(0.0, self.money + clamp(money, -100000, MONEY_GAIN_LIMIT)), 2)
         if self.money < before:
             self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + before - self.money
+        elif self.money > before:
+            self.turn_flags["earned"] = self.turn_flags.get("earned", 0) + self.money - before
         self._check_death(reason or "치명적인 부상을 입었다")
 
     def find_item(self, name):
@@ -465,7 +486,7 @@ class GameState:
 
     # ---------- 자유 행동 ----------
     def attempt(self, action, difficulty="normal", crime="none", witnessed="none", violent=False,
-                item="", stealth=False):
+                item="", stealth=False, success_money=0, success_items=None):
         """결과가 불확실한 행동을 판정한다. 성공 확률은 엔진이 계산하고 주사위를 굴린다.
 
         GM은 난이도, 범죄 종류, 목격자, 폭력 여부만 정하고 성공 여부는 정하지 못한다.
@@ -509,12 +530,26 @@ class GameState:
                 effects.append(f"{crime} 목격됨 → 수배도 +{gain} (현재 {self.wanted:.0f})")
             else:
                 effects.append(f"{crime} — 목격자 없음, 수배되지 않음")
+        rejected = []
+        if success:                       # 성공의 대가: 미리 걸어 둔 돈·물건을 엔진이 직접 넣는다
+            gain = round(clamp(float(success_money or 0), 0, MONEY_GAIN_LIMIT), 2)
+            if gain:
+                self.money = round(self.money + gain, 2)
+                self.turn_flags["earned"] = self.turn_flags.get("earned", 0) + gain
+                effects.insert(0, f"+${gain:,.0f}")
+            if success_items:
+                before = list(self.items)
+                rejected = self.update_items(add=list(success_items))
+                got = [i for i in self.items if i not in before]
+                if got:
+                    effects.insert(0, "얻은 물건: " + ", ".join(got))
         self.turn_flags["attempt"] = {"action": str(action)[:40], "chance": chance, "success": success,
                                       "illegal": crime != "none", "crime": crime, "effects": effects}
         return {"success": success, "chance": f"{chance * 100:.0f}%", "보정": reasons or ["없음"],
                 "엔진이_적용한_결과": effects or ["없음"],
-                "안내": ("성공했다. 성공의 결과(차량 획득은 acquire_vehicle, 돈·물건은 update_status/"
-                        "update_inventory)를 툴로 반영하고 서술하라." if success else
+                **({"거부된_물건": rejected} if rejected else {}),
+                "안내": ("성공했다. 걸어 둔 돈·물건은 엔진이 이미 넣었다(다시 넣지 마라). 탈것을 얻었다면 "
+                        "acquire_vehicle 을 호출하라." if success else
                         "실패했다. 목표를 이루지 못했다. 실패를 그대로 서술하고, 상대의 반응(반격, 신고, 도주)을 "
                         "현실적으로 그려라. 이미 엔진이 적용한 피해를 다시 적용하지 마라.")}
 
@@ -585,6 +620,8 @@ class GameState:
         if not v:
             return {"success": False, "message": "운전할 탈것이 없다."}
         km = clamp(float(km), 1, min(v["range_km"], self.distance))
+        if self.early:
+            km = min(km, EARLY_MAX_TRAVEL_KM)
         new_lat, new_lon = geo.move_toward_korea(self.lat, self.lon, km)
         arriving = geo.distance_to_korea(new_lat, new_lon) <= ARRIVAL_RADIUS_KM
         if not v["sea"] and not arriving and geo.is_land(new_lat, new_lon) is False:
@@ -656,7 +693,11 @@ class GameState:
                     "message": f"{rule['label']}은(는) {'/'.join(rule['places'])}에서만 이용할 수 있다. "
                                f"현재 위치는 {self.place_type}."
                                + (f" ({ticket['item']}은(는) 그대로 가지고 있다.)" if ticket else "")}
+        if self.early and method in ("train", "ship", "flight"):
+            return {"success": False, "message": self.early_message()}
         km = clamp(float(km), 1, min(rule["max_km"], self.distance))
+        if self.early:
+            km = min(km, EARLY_MAX_TRAVEL_KM)
         if ticket:
             km = min(float(ticket["km"]), self.distance)   # 예약해 둔 구간만큼 간다
         if method == "flight":
@@ -741,6 +782,8 @@ class GameState:
     def offer_needs(self):
         """조건이 붙은 기회 중 지금 허용되는 것."""
         needs = []
+        if self.early:
+            return tuple(needs)
         # 공관과 연락이 닿을 수 있다: 사람 사는 곳에 있거나, 전화가 되는 곳에 있다
         if not self.flags.get("embassy_visited") and (self.place_type in ("마을", "도시") or self.flags.get("can_call")):
             needs.append("contact")
@@ -759,6 +802,10 @@ class GameState:
             offer["text"] = offer["text"].replace("{dest}", "")
             return self._finish_offer(offer)
         city = None
+        if self.early:
+            if to in ("embassy", "airport", "port_toward_korea"):
+                return None
+            to = "village"                 # 초반에는 가까운 마을까지만 데려다준다
         if to in ("city_or_village", "rescue"):
             limit = 250 if to == "rescue" else move["max_km"]
             city = places.nearest_city(self.lat, self.lon, max_km=limit)
@@ -792,7 +839,8 @@ class GameState:
                     "label": f"{port['name']} 항구" if port else "한국 쪽 항구 도시"}
         else:
             # 가까운 도시가 없으면 근처 마을. 마을은 대체로 한국 쪽이지만 꼭 그 방향은 아니다.
-            km = random.randint(30, 120) if to == "rescue" else random.randint(60, 250)
+            km = (random.randint(20, EARLY_MAX_TRAVEL_KM) if self.early else
+                  random.randint(30, 120) if to == "rescue" else random.randint(60, 250))
             base = geo.bearing_deg(self.lat, self.lon, *geo.SEOUL)
             for _ in range(4):
                 lat, lon = geo.destination(self.lat, self.lon, base + random.uniform(-100, 100), km)
@@ -834,6 +882,15 @@ class GameState:
                 return {"success": False, "message": f"이미 사람 사는 곳({self.place_type})에 있다."}
             return self._head_to_village(notes)
 
+        if target in ("city", "embassy", "airport") and self.early:
+            if self.place_type == "야생" and not (target == "embassy" and self.flags.get("can_call")):
+                notes.append(self.early_message() + " 우선 가장 가까운 마을로 향한다.")
+                return self._head_to_village(notes)
+            if target == "embassy" and self.flags.get("can_call") and not self.flags.get("embassy_contacted"):
+                pass                       # 전화 통화는 초반에도 된다 (아래에서 처리)
+            else:
+                return {"success": False, "message": self.early_message()}
+
         if target == "city":
             city = places.nearest_city(self.lat, self.lon)
             if city and city["km"] < 15:
@@ -845,7 +902,7 @@ class GameState:
         if target == "embassy":
             if self.flags.get("embassy_visited"):
                 return {"success": False, "message": "이미 공관의 도움을 받았다."}
-            if self.place_type in ("마을", "도시"):
+            if self.place_type in ("마을", "도시") and not self.early:
                 return self._go_embassy_now()
             # 야생: 순간이동은 없다. 전화가 되면 통화만 하고, 먼저 사람 사는 곳으로 간다.
             if self.flags.get("can_call") and not self.flags.get("embassy_contacted"):
@@ -1146,7 +1203,12 @@ class GameState:
                 "message": f"{offer['text']} → {story} " + " / ".join(results)}
 
     def _arrive_at_new_place(self, method):
-        """이동 후 새 위치의 날씨·지명·지형·장소 유형을 갱신한다."""
+        """이동 후 새 위치의 날씨·지명·지형·장소 유형을 갱신한다. 초반에는 도시에 닿지 않는다."""
+        self._place_new_location(method)
+        if self.early and self.place_type == "도시":
+            self.place_type = "마을"
+
+    def _place_new_location(self, method):
         village_chance = self.hazard["village"]      # 떠나온 지형 기준
         self.set_weather(get_weather(self.lat, self.lon))
         place = geo.reverse_geocode(self.lat, self.lon)
@@ -1255,6 +1317,8 @@ class GameState:
             "보유_탈것": (f"{self.vehicle['name']} (연료로 약 {self.vehicle['range_km']}km"
                          + (", 훔친 차량" if self.vehicle.get("stolen") else "") + ")") if self.vehicle else "없음",
             "수배도": f"{self.wanted:.0f}/100" + (" - 공항·항구 검문에서 붙잡힐 수 있음" if self.wanted >= WANTED_AIRPORT_LIMIT else ""),
+            "초반_제한": (f"앞으로 약 {max(1, round(EARLY_GAME_HOURS - self.elapsed_hours))}시간은 도시·공항·공관으로 갈 수 "
+                         "없다(마을까지만)") if self.early else "없음",
             "진행_중인_여정": (f"{self.journey['label']}까지 약 "
                                f"{geo.haversine_km(self.lat, self.lon, self.journey['lat'], self.journey['lon']):.0f}km 남음"
                                if self.journey else "없음"),

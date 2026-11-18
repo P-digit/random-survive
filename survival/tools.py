@@ -49,7 +49,9 @@ TOOLS = [
             "satiety": {"type": "number", "description": "포만감 변화량 (-40~+60)"},
             "hydration": {"type": "number", "description": "수분 변화량 (-40~+60)"},
             "energy": {"type": "number", "description": "기력 변화량 (-40~+40)"},
-            "money": {"type": "number", "description": "번 돈(USD, 0 이상). 한 번에 최대 +120. 쓴 돈은 pay 로"},
+            "money": {"type": "number",
+                      "description": "돈의 변화(USD). +는 번 돈·받은 돈·주운 돈(한 번에 최대 +600), "
+                                     "-는 잃은 돈(도둑맞음·빼앗김·벌금). 물건값으로 쓴 돈은 pay 로"},
             "consumed_items": {"type": "array", "items": {"type": "string"},
                                "description": "이 행동으로 먹거나 마시거나 써서 없어진 소지품의 이름들. "
                                               "받아 둔 빗물, 딴 열매처럼 환경에서 얻어 소지품에 넣어 둔 것도 "
@@ -61,7 +63,8 @@ TOOLS = [
         "update_inventory",
         "소지품을 추가하거나 제거한다. 물건을 얻거나, 잃어버리거나, 팔았을 때 호출한다. "
         "소지품은 손에 들거나 배낭에 넣어 가지고 다닐 수 있는 물건만 된다. 오두막·동굴·오아시스·개울 같은 "
-        "장소와 지형, 차량, 동물, 사람은 소지품이 아니므로 넣지 않는다(발견한 사실만 서술한다).",
+        "장소와 지형, 동물, 사람은 소지품이 아니므로 넣지 않는다(발견한 사실만 서술한다). "
+        "차·트럭·오토바이·보트 같은 탈것은 소지품이 아니라 acquire_vehicle 로 얻는다.",
         {
             "add": {"type": "array", "description": "새로 얻은 물건들. 없으면 빈 배열",
                     "items": {"type": "object", "additionalProperties": False,
@@ -112,6 +115,12 @@ TOOLS = [
             "violent": {"type": "boolean", "description": "몸싸움·폭력이 따르는 행동이면 true (실패하면 다친다)"},
             "item": {"type": "string", "description": "이 시도에 쓰는 소지품 이름(다용도 칼 등). 없으면 빈 문자열"},
             "stealth": {"type": "boolean", "description": "몰래 하는 행동이면 true (밤이면 유리하다)"},
+            "success_money": {"type": "number",
+                              "description": "성공하면 얻는 돈(USD). 지갑·금고를 훔치거나 협박해 받는 돈 등. 그 지역 형편에 "
+                                             "맞는 구체적인 금액(최대 600). 돈과 무관하면 0. 성공하면 엔진이 바로 넣는다"},
+            "success_items": {"type": "array", "items": {"type": "string"},
+                              "description": "성공하면 얻는 들고 다닐 수 있는 물건들. 없으면 빈 배열. 탈것은 넣지 말고 "
+                                             "acquire_vehicle 로"},
         },
     ),
     _function(
@@ -280,7 +289,8 @@ def execute_tool(state, name, arguments, client=None):
             result = state.attempt(args.get("action", ""), args.get("difficulty", "normal"),
                                    str(args.get("crime", "none")), str(args.get("witnessed", "none")),
                                    bool(args.get("violent")), str(args.get("item", "")),
-                                   bool(args.get("stealth")))
+                                   bool(args.get("stealth")), float(args.get("success_money", 0) or 0),
+                                   list(args.get("success_items") or []))
         elif name == "add_lead":
             lead = state.add_lead(args.get("kind"), str(args.get("clue", "")))
             result = ({"ok": True, "단서": f"{lead['id']} {lead['label']} — {lead['direction']}, 약 {lead['km']}km "

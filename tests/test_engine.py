@@ -32,6 +32,7 @@ def game(monkeypatch):
     monkeypatch.setattr(state_module, "get_weather", lambda lat, lon: fake_weather())
     monkeypatch.setattr(geo, "reverse_geocode", lambda lat, lon: {"name": "테스트 지역"})
     monkeypatch.setattr(geo, "is_land", lambda lat, lon: True)
+    monkeypatch.setattr(state_module, "EARLY_GAME_HOURS", 0)   # 대부분의 테스트는 초반 제한 없이 (따로 테스트함)
     monkeypatch.setattr(state_module.climate_api, "get_climate",
                         lambda lat, lon, weather, today=None: climate.make_climate("temperate", lat, 7))
     lat, lon = 46.9, 103.8
@@ -121,7 +122,7 @@ def test_dehydration_kills(game):
 def test_llm_cannot_cheat_with_big_deltas(game):
     game.apply_delta(health=999, money=99999)
     assert game.health == 100
-    assert game.money == 50 + 120
+    assert game.money == 50 + 600                       # 한 번에 최대 +600
 
 
 def test_travel_rules(game):
@@ -1285,3 +1286,75 @@ def test_every_city_country_has_a_sign_language():
 def test_season_wording_fits_barren_climates():
     assert climate.make_climate("desert", -23.9, 11)["season_en"] == "spring"
     assert "green" in climate.make_climate("temperate", 37, 4)["season_en"]
+
+
+# ---------- 13차 수정: 행동의 결과 반영 / 초반 제한 ----------
+def test_theft_reward_is_applied_by_engine(game, monkeypatch):
+    fix_roll(monkeypatch, 0.0)                                       # 성공
+    game.begin_turn()
+    out = call(game, "attempt_action", action="옆 사람의 지갑을 훔친다", difficulty="normal", crime="절도",
+               witnessed="none", violent=False, item="", stealth=True, success_money=320,
+               success_items=["가죽 지갑", "픽업트럭"])
+    assert out["success"] and game.money == 50 + 320 and "가죽 지갑" in game.items
+    assert not any("트럭" in i for i in game.items) and out["거부된_물건"]       # 탈것은 소지품이 아니다
+    assert any("+$320" in n["text"] for n in gamemaster.collect_notices(game))
+    game.end_turn(0.5)
+    assert game.delta["money"] == 320                                # 상태창에도 +320
+
+    fix_roll(monkeypatch, 0.99)                                      # 실패하면 아무것도 얻지 못한다
+    game.begin_turn()
+    game.attempt("금고를 턴다", "hard", crime="절도", witnessed="none", success_money=500)
+    assert game.money == 370
+
+
+def test_vehicles_never_enter_inventory(game):
+    game.begin_turn()
+    out = call(game, "update_inventory", remove=[], add=[
+        {"name": "트럭 기사의 화물 트럭", "carryable": True}, {"name": "오토바이", "carryable": True},
+        {"name": "낙타", "carryable": True}, {"name": "트럭 열쇠", "carryable": True}])
+    assert len(out["거부된_물건"]) == 3 and "acquire_vehicle" in out["거부된_물건"][0]
+    assert game.items[-1] == "트럭 열쇠"                              # 열쇠는 들고 다닐 수 있다
+
+
+def test_money_from_narration_is_applied(game):
+    game.begin_turn()
+    assert gamemaster.auto_money(game, "지갑 안에는 $280가 들어 있었고, 당신은 그 돈을 챙겼다.") == 280
+    assert game.money == 330
+    game.begin_turn()
+    assert gamemaster.auto_money(game, "소매치기에게 $40를 빼앗겼다.") == -40 and game.money == 290
+    game.begin_turn()
+    call(game, "update_status", health=0, satiety=0, hydration=0, energy=0, money=50,
+         consumed_items=[], reason="일당")
+    assert gamemaster.auto_money(game, "일당으로 $50를 받았다.") == 0 and game.money == 340   # 이미 반영됨
+    game.begin_turn()
+    assert gamemaster.auto_money(game, "$5000를 주웠다") == 600                               # 상한
+
+
+def test_early_game_keeps_you_near_the_drop(game, monkeypatch):
+    monkeypatch.setattr(state_module, "EARLY_GAME_HOURS", 36)
+    game.place_type, game.money, game.country_code = "마을", 3000, "mn"
+    game.begin_turn()
+    assert game.early and "초반_제한" in gamemaster.build_input(game, "x") and "36시간" in game.summary()["초반_제한"]
+    for target in ("city", "embassy", "airport"):
+        out = call(game, "go_to", target=target)
+        assert out["success"] is False and "벗어날 방법" in out["message"]
+    assert game.travel("train", 500)["success"] is False
+    before = game.distance
+    assert game.travel("bus", 500)["success"] and before - game.distance <= 61    # 초반에는 짧게
+    assert game.place_type != "도시"                                            # 도시에는 닿지 않는다
+    assert game.offer_needs() == ()
+
+    from survival.events import MAJOR_EVENTS
+    e = next(x for x in MAJOR_EVENTS if x["id"] == "trucker")
+    offer = game.plan_offer({"id": "trucker", "text": e["text"], "accept": e["accept"], "hours": 0, "stats": {},
+                             "items": [], "money": 0, "risk": "", "bad": dict(e["bad"]), "move": dict(e["move"])})
+    assert offer["dest"]["place"] == "마을" and offer["dest"]["km"] <= 60       # 트럭도 근처 마을까지만
+
+    wild = GameState(lat=46.9, lon=103.8, place_name="몽골", weather=fake_weather(), biome="forest",
+                     distance=geo.distance_to_korea(46.9, 103.8))
+    wild.begin_turn()
+    out = wild.go_to("city")                                                    # 야생에서는 마을까지는 간다
+    assert out["success"] and "가장 가까운 마을로" in out["message"]
+
+    game.elapsed_hours = 40                                                     # 하루 반이 지나면 풀린다
+    assert not game.early and "contact" in game.offer_needs()
