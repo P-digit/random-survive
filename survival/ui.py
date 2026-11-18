@@ -214,12 +214,32 @@ def render_notices(notices):
     return "\n\n".join(blocks) + ("\n\n" if blocks else "")
 
 
+def consumption_summary(state):
+    """먹고 마신 턴에 수분·포만감이 왜 그만큼 변했는지: '💧 수분 +45 (물 1L) · -4 (시간·더위)'."""
+    eaten = state.turn_flags.get("eaten") or []
+    if not eaten:
+        return ""
+    gains = state.turn_flags.get("gm_gain") or {}
+    drain = state.turn_flags.get("drain") or {}
+    parts = []
+    for stat, icon, label in (("hydration", "💧", "수분"), ("satiety", "🍖", "포만감")):
+        items = [e["item"] for e in eaten if e["stat"] == stat]
+        if not items:
+            continue
+        line = f"{icon} {label} +{gains.get(stat, 0):.0f} ({', '.join(items)})"
+        if drain.get(stat, 0) >= 0.5:
+            line += f" · -{drain[stat]:.0f} (시간·{'더위' if state.weather.get('feels_like', 15) >= 30 else '활동'})"
+        parts.append(line)
+    return " / ".join(parts)
+
+
 def turn_summary(state):
-    """대화창에 붙이는 한 줄 요약: 이번 턴에 흐른 시간과 현재 시각."""
+    """대화창에 붙이는 한 줄 요약: 이번 턴에 흐른 시간과 현재 시각, 먹고 마신 것의 효과."""
     hours = state.delta.get("hours", 0)
     if hours <= 0:
         return ""
-    return f"\n\n*⏱ {_hours_text(hours)} 경과 → {state.day}일차 {state.hour:02d}:00*"
+    eat = consumption_summary(state)
+    return f"\n\n*⏱ {_hours_text(hours)} 경과 → {state.day}일차 {state.hour:02d}:00*" + (f"  \n*{eat}*" if eat else "")
 
 
 def render_location(state):

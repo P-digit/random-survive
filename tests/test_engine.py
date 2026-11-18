@@ -1966,3 +1966,77 @@ def test_supply_crate_stays_until_you_leave(game, monkeypatch):
     game.turn_flags["player_text"] = "남쪽으로 30km 걷는다"
     call(game, "travel", method="walk", distance_km=30)
     assert game.offer is None                                            # 떠나면 두고 온 것
+
+
+# ---------- 20차 수정: 물을 마시면 수분이 오른다 ----------
+def desert_noon(game):
+    game.biome, game.place_type, game.start_hour, game.elapsed_hours = "desert", "야생", 13, 0
+    game.weather.update(temperature=38.0, feels_like=40.0, humidity=15.0, hourly=[])
+    game.forecast, game.diurnal = [], {}
+
+
+def reply_with(monkeypatch, *responses):
+    replies = iter(responses)
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=lambda **k: next(replies))))
+
+
+def test_drinking_in_the_desert_raises_hydration(game, monkeypatch):
+    desert_noon(game)
+    game.hydration = 50
+    # GM이 서술만 하고 아무 툴도 부르지 않은 경우 (보고된 증상)
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text="당신은 물을 들이켠다."))
+    gamemaster.run_turn(game, "가지고 있는 물을 마신다")
+    assert "물 1L" not in game.items and game.hydration > 50 + 35          # +45, 15분 동안 -3.6
+    assert game.delta["hours"] == 0.25
+    from survival.ui import turn_summary
+    assert "💧 수분 +45 (물)" in turn_summary(game) and "더위" in turn_summary(game)
+
+
+def test_gm_gives_too_little_or_only_removes_item(game, monkeypatch):
+    desert_noon(game)
+    game.hydration = 50
+    call_small = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_status", call_id="a", arguments=json.dumps(
+            {"health": 0, "satiety": 0, "hydration": 5, "energy": 0, "money": 0, "money_source": "none",
+             "consumed_items": ["물 1L"], "reason": "물을 마심"}))])
+    reply_with(monkeypatch, call_small, SimpleNamespace(id="r2", output=[], output_text="당신은 물을 마신다."))
+    gamemaster.run_turn(game, "물을 마신다")
+    assert game.hydration >= 50 + 45 - 4                                   # GM이 +5만 줘도 +45 보장
+
+    other = GameState(lat=23, lon=11, place_name="사막", weather=fake_weather(), biome="desert")
+    desert_noon(other)
+    other.hydration = 40
+    only_remove = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_inventory", call_id="a", arguments=json.dumps(
+            {"add": [], "remove": ["물 1L"], "source": "none", "giver": ""}))])
+    reply_with(monkeypatch, only_remove, SimpleNamespace(id="r2", output=[], output_text="물을 다 마셨다."))
+    gamemaster.run_turn(other, "물을 마신다")
+    assert other.hydration >= 40 + 45 - 4 and "물 1L" not in other.items
+
+
+def test_eating_food_and_not_double_counting(game, monkeypatch):
+    game.satiety = 30
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text="당신은 에너지바를 씹는다."))
+    gamemaster.run_turn(game, "에너지바를 먹는다")
+    assert "에너지바 1개" in game.items and game.satiety >= 30 + 25 - 1        # 하나만 먹는다
+    game.satiety = 30
+    big = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_status", call_id="a", arguments=json.dumps(
+            {"health": 0, "satiety": 40, "hydration": 0, "energy": 0, "money": 0, "money_source": "none",
+             "consumed_items": ["에너지바"], "reason": "든든히 먹음"}))])
+    reply_with(monkeypatch, big, SimpleNamespace(id="r2", output=[], output_text="배가 부르다."))
+    gamemaster.run_turn(game, "에너지바를 먹는다")
+    assert 30 + 40 - 1 <= game.satiety <= 30 + 40                           # GM이 더 주면 그대로, 겹쳐 더하지 않는다
+
+
+def test_river_water_is_not_taken_from_inventory(game, monkeypatch):
+    game.hydration = 40
+    river = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_status", call_id="a", arguments=json.dumps(
+            {"health": 0, "satiety": 0, "hydration": 30, "energy": 0, "money": 0, "money_source": "none",
+             "consumed_items": [], "reason": "개울물을 끓여 마심"}))])
+    reply_with(monkeypatch, river, SimpleNamespace(id="r2", output=[], output_text="개울물을 마신다."))
+    gamemaster.run_turn(game, "개울물을 끓여 마신다")
+    assert "물 1L" in game.items                                           # 가진 물은 그대로
+    assert gamemaster.estimate_time("에너지바를 먹고 잔다") == (7.0, "sleep")   # 먹고 자면 잠이 우선

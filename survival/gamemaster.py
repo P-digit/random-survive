@@ -542,6 +542,49 @@ def collect_notices(state):
     return notices
 
 
+DRINK_VERBS = ("마신", "마셔", "마시", "들이켜", "들이킨", "목을 축")
+EAT_VERBS = ("먹는", "먹어", "먹고", "먹자", "먹었", "먹을", "씹어", "씹는", "삼킨", "삼켜", "베어 문")
+
+
+def auto_eat(state, player_text):
+    """플레이어가 소지품을 먹거나 마신다고 했는데 GM이 아무것도 처리하지 않았다면, 엔진이 직접 먹은 것으로 처리한다.
+
+    GM이 소지품에서 지우기만 한 경우에도(먹은 것 칸이 아니라) 먹은 것으로 기록해 회복을 보장한다.
+    """
+    from .state import consumable_effect
+    text = (player_text or "").replace(" ", "")
+    wants = []
+    if any(v.replace(" ", "") in text for v in DRINK_VERBS):
+        wants.append("hydration")
+    if any(v.replace(" ", "") in text for v in EAT_VERBS):
+        wants.append("satiety")
+    if not wants:
+        return []
+    eaten = state.turn_flags.setdefault("eaten", [])
+    gains = state.turn_flags.get("gm_gain") or {}
+    done = []
+    for stat in wants:
+        if any(e["stat"] == stat for e in eaten):
+            continue
+        # 1) GM이 지우기만 한 소지품
+        for item in state.turn_flags.get("removed_items", []):
+            effect = consumable_effect(item)
+            if effect and effect[0] == stat:
+                eaten.append({"item": item_core(item) or item, "stat": stat, "amount": effect[1]})
+                done.append(item)
+                break
+        else:
+            if gains.get(stat, 0) > 0:
+                continue                 # GM이 소지품이 아닌 것(강물 등)으로 회복을 줬다
+            # 2) 아무것도 처리하지 않았다: 입력에 나온 소지품(없으면 그 종류의 첫 소지품)을 먹은 것으로
+            candidates = [i for i in state.items if (consumable_effect(i) or ("", 0))[0] == stat]
+            named = [i for i in candidates if len(item_core(i)) >= 1 and item_core(i) in text]
+            pick = (named or ([] if stat == "satiety" else candidates))[:1]
+            if pick and state.consume_item(pick[0]):
+                done.append(pick[0])
+    return done
+
+
 def make_recap(state, last=6):
     """이전 대화를 이어받지 못할 때(오래된 세이브) LLM에게 줄 최근 줄거리."""
     lines = []
@@ -568,6 +611,7 @@ def auto_consume(state, player_text):
 # LLM이 advance_time 을 빠뜨렸을 때, 플레이어의 입력에서 걸린 시간을 추정하기 위한 표
 # (키워드들, 시간, 행동 종류) - 위에서부터 먼저 맞는 것을 쓴다
 TIME_HINTS = [
+    (("마신", "마셔", "마시", "들이켜", "먹는", "먹어", "먹고", "먹자", "삼킨", "씹어"), 0.25, "rest"),
     (("취침", "잠을", "잠든", "잠들", "잔다", "자자", "자고", "숙면", "눈을 붙"), 7.0, "sleep"),
     (("낮잠", "쪽잠"), 2.0, "sleep"),
     (("일을", "일한", "일하", "알바", "아르바이트", "돈을 번", "돈을 벌"), 5.0, "work"),
@@ -582,7 +626,7 @@ def estimate_time(player_text):
     """플레이어 입력에서 (걸린 시간, 행동 종류)를 추정한다. '3시간 잔다'처럼 숫자가 있으면 그 값을 쓴다."""
     text = player_text or ""
     hours, activity = 0.5, "other"
-    for keywords, default_hours, kind in TIME_HINTS:
+    for keywords, default_hours, kind in TIME_HINTS[1:] + TIME_HINTS[:1]:   # 먹고 마시기는 다른 행동이 없을 때만
         if any(k in text for k in keywords):
             hours, activity = default_hours, kind
             break
@@ -661,6 +705,8 @@ def run_turn(state, player_text=None):
     state.prev_response_id = response.id
     state.guard_unrequested_move()
     auto_consume(state, player_text)
+    auto_eat(state, player_text)
+    state.settle_consumption()
     auto_charge(state, response.output_text)
     auto_money(state, response.output_text)
     if player_text is None:

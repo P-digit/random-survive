@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from . import climate as climate_api
 from . import geo, leads as leads_api, places
-from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CRIMES,
+from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CONSUMABLES, CRIMES,
                      EARLY_GAME_HOURS, EARLY_MAX_TRAVEL_KM, MONEY_GAIN_LIMIT,
                      JOURNEY_MAX_HOURS, VILLAGE_DISTANCE,
                      DIURNAL_AMPLITUDE, LAND_METHODS, WITNESS,
@@ -54,6 +54,14 @@ def arrival_place(method, city):
     if method in ("bus", "hitchhike", "offer"):
         return "도시" if near <= 30 else "마을"
     return "도시" if near <= 15 else "야생"
+
+
+def consumable_effect(name):
+    """먹거나 마시는 물건이면 (오르는 수치, 기본 회복량). 아니면 None."""
+    for words, stat, amount in CONSUMABLES:
+        if any(w in name for w in words):
+            return stat, amount
+    return None
 
 
 def item_problem(name):
@@ -388,9 +396,13 @@ class GameState:
                 energy_rate *= hz["energy"] * VITALS_DRAIN
             elif wild and not sheltered and (temp <= 5 or temp >= 35):
                 energy_rate *= 0.5        # 혹독한 날씨에 노출된 채로는 제대로 쉬지 못한다
+            before = (self.satiety, self.hydration)
             self.satiety = clamp(self.satiety - hunger * h)
             self.hydration = clamp(self.hydration - thirst * h)
             self.energy = clamp(self.energy + energy_rate * h)
+            drain = self.turn_flags.setdefault("drain", {"satiety": 0.0, "hydration": 0.0})
+            drain["satiety"] += before[0] - self.satiety
+            drain["hydration"] += before[1] - self.hydration
 
             # --- 피해 ---
             damage = 0.0
@@ -432,6 +444,8 @@ class GameState:
         self.health = clamp(self.health + clamp(health, -40, 30))
         self.satiety = clamp(self.satiety + clamp(satiety, -40, 60))
         self.hydration = clamp(self.hydration + clamp(hydration, -40, 60))
+        self._note_gain("satiety", clamp(satiety, -40, 60))
+        self._note_gain("hydration", clamp(hydration, -40, 60))
         self.energy = clamp(self.energy + clamp(energy, -40, 40))
         before = self.money
         self.money = round(max(0.0, self.money + clamp(money, -100000, MONEY_GAIN_LIMIT)), 2)
@@ -471,7 +485,28 @@ class GameState:
         else:
             self.items.pop(index)
         self.turn_flags["consumed"] = True
+        effect = consumable_effect(item)
+        if effect:
+            self.turn_flags.setdefault("eaten", []).append({"item": item_core(item) or item, "stat": effect[0],
+                                                            "amount": effect[1]})
         return True
+
+    def settle_consumption(self):
+        """먹고 마신 것의 회복을 보장한다. GM이 회복을 빠뜨리거나 작게 줬으면 기본 회복량까지 채운다."""
+        eaten = self.turn_flags.get("eaten") or []
+        given = self.turn_flags.get("gm_gain") or {}
+        for stat in ("hydration", "satiety"):
+            need = sum(e["amount"] for e in eaten if e["stat"] == stat)
+            short = need - given.get(stat, 0)
+            if need and short > 0:
+                setattr(self, stat, clamp(getattr(self, stat) + short))
+                given[stat] = need
+        self.turn_flags["gm_gain"] = given
+
+    def _note_gain(self, stat, amount):
+        if amount > 0:
+            gains = self.turn_flags.setdefault("gm_gain", {})
+            gains[stat] = gains.get(stat, 0) + amount
 
     def update_items(self, add=None, remove=None):
         """소지품을 추가/제거한다. 넣을 수 없는 것은 거부하고 그 목록을 반환한다."""
@@ -481,6 +516,7 @@ class GameState:
             if item:
                 self.items.remove(item)
                 self.turn_flags["consumed"] = True
+                self.turn_flags.setdefault("removed_items", []).append(item)
         for entry in add or []:
             # {"name": ..., "carryable": ...} 또는 그냥 문자열
             name = str(entry.get("name", "") if isinstance(entry, dict) else entry).strip()[:30]
