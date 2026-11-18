@@ -136,6 +136,8 @@ def test_travel_rules(game):
     game.place_type, game.money = "도시", 10
     assert game.travel("train", 1000)["success"] is False    # 돈 부족
     game.money = 5000
+    assert game.travel("flight", 99999)["success"] is False  # 초반에는 공항으로 갈 방법이 없다
+    game.flags["at_airport"] = True
     result = game.travel("flight", 99999)
     assert result["arrived_in_korea"] is True
     assert game.status == "won" and game.distance == 0
@@ -288,23 +290,27 @@ def test_only_one_travel_per_turn(game):
 def test_major_event_offer_ride_and_expiry(game):
     rng = random.Random(1)
     offer = roll_major_event("야생", True, rng=rng)
-    assert offer["id"] in ("trucker", "convoy", "rescue", "supply") and offer["detail"]
+    assert offer["id"] in ("trucker", "convoy", "rescue", "supply")
 
     game.turn = 5
     game.begin_turn()
-    game.offer = {"id": "trucker", "text": "트럭", "accept": "트럭에 올라탄다", "detail": "", "turn": game.turn,
-                  "hours": 0, "stats": {}, "items": [], "money": 0, "ride_km": 400, "speed": 60, "dest": "마을"}
+    template = next(e for e in __import__("survival.events", fromlist=["x"]).MAJOR_EVENTS if e["id"] == "trucker")
+    game.offer = game.plan_offer({"id": "trucker", "text": template["text"], "accept": "트럭에 올라탄다",
+                                  "hours": 0, "stats": {}, "items": [], "money": 0, "risk": "",
+                                  "bad": dict(template["bad"]), "move": dict(template["move"])})
+    game.offer["turn"] = game.turn
+    assert "울란바토르" in game.offer["text"] and "{dest}" not in game.offer["text"]   # 실제 가까운 도시가 목적지
     game.end_turn(0.5)
     assert game.offer is not None          # 나온 턴에는 유지
     game.begin_turn()
-    before = game.distance
+    game.offer["bad"]["chance"] = 0                       # 좋은 결과로 고정
     out = call(game, "accept_offer")
-    assert out["success"] and game.distance == pytest.approx(before - 400, abs=3)
-    assert game.place_type == "마을" and game.offer is None
+    assert out["success"] and game.offer is None
+    assert (game.lat, game.lon) == (47.89, 106.91) and game.place_type == "도시" and "울란바토르" in game.place_name
     assert call(game, "accept_offer")["success"] is False
 
     game.offer = {"id": "news", "text": "기자", "accept": "", "detail": "", "turn": game.turn - 1,
-                  "hours": 0, "stats": {}, "items": [], "money": 100, "ride_km": 0}
+                  "hours": 0, "stats": {}, "items": [], "money": 100}
     game.end_turn(0.5)
     assert game.offer is None              # 받아들이지 않으면 다음 턴 끝에 사라진다
 
@@ -434,30 +440,33 @@ def test_flight_is_always_direct_to_korea(game):
     game.place_type, game.money = "도시", 100
     assert call(game, "travel", method="flight", distance_km=300)["success"] is False   # 직항 요금이 모자람
     game.money = 5000
+    game.flags["at_airport"] = True
     out = call(game, "travel", method="flight", distance_km=300)
     assert out["arrived_in_korea"] and game.status == "won"
 
 
 def test_offer_can_end_badly(game, monkeypatch):
+    from survival.events import MAJOR_EVENTS
+
     def fresh(offer_id, money=200.0):
-        from survival.events import MAJOR_EVENTS
         s = GameState(lat=46.9, lon=103.8, place_name="몽골", weather=fake_weather(), biome="forest",
                       start_distance=2160, distance=geo.distance_to_korea(46.9, 103.8), money=money)
         s.begin_turn()
-        s.offer = None
-        while s.offer is None or s.offer["id"] != offer_id:
-            place = next(e for e in MAJOR_EVENTS if e["id"] == offer_id)["where"][0]
-            s.offer = roll_major_event(place, True)
+        e = next(x for x in MAJOR_EVENTS if x["id"] == offer_id)
+        s.offer = s.plan_offer({"id": offer_id, "text": e["text"], "accept": e["accept"], "hours": e.get("hours", 0),
+                                "stats": dict(e.get("stats", {})), "items": list(e.get("items", [])),
+                                "money": 100 if "money" in e else 0, "risk": e["risk"], "bad": dict(e["bad"]),
+                                "move": dict(e.get("move", {}))})
         s.offer["turn"] = s.turn
         return s
 
     monkeypatch.setattr(state_module.random, "random", lambda: 0.0)     # 항상 나쁜 결과
     s = fresh("trucker")
-    before = s.distance
-    planned = s.offer["ride_km"]
+    route = geo.haversine_km(s.lat, s.lon, s.offer["dest"]["lat"], s.offer["dest"]["lon"])
+    start = (s.lat, s.lon)
     out = s.accept_offer()
     assert out["outcome"] == "나쁜 결과" and s.money == pytest.approx(60)   # 70%를 빼앗김
-    assert before - s.distance == pytest.approx(planned * 0.2, abs=3) and s.place_type == "야생"
+    assert geo.haversine_km(*start, s.lat, s.lon) == pytest.approx(route * 0.2, abs=3) and s.place_type == "야생"
     assert s.health < 100
 
     s = fresh("korean")
@@ -471,10 +480,8 @@ def test_offer_can_end_badly(game, monkeypatch):
 
     monkeypatch.setattr(state_module.random, "random", lambda: 0.99)    # 항상 좋은 결과
     s = fresh("trucker")
-    before, planned = s.distance, s.offer["ride_km"]
     out = s.accept_offer()
-    assert out["outcome"] == "좋은 결과" and s.money == 200
-    assert before - s.distance == pytest.approx(planned, abs=3)
+    assert out["outcome"] == "좋은 결과" and s.money == 200 and s.place_type == "도시"
     s = fresh("supply")
     s.accept_offer()
     assert any("비상식량" in i for i in s.items)
@@ -576,6 +583,7 @@ def test_describe_image_reads_back_what_was_drawn(tmp_path):
 def test_notices_for_important_events(game):
     game.turn = 4
     game.begin_turn()
+    game.turn_flags.pop("new_lead", None)                            # 무작위로 생긴 단서는 이 테스트와 무관
     game.event = {"kind": "danger", "text": "눈보라가 몰아치기 시작했다."}
     game.offer = {"text": "트럭이 멈춘다.", "accept": "트럭에 올라탄다", "detail": "약 300km 무료 이동",
                   "risk": "낯선 사람의 차다", "turn": game.turn}
@@ -619,6 +627,7 @@ def test_ticket_is_remembered_and_used_on_boarding(game):
         game.begin_turn()
         game.end_turn(0.5)
     game.money = 0
+    game.flags["embassy_visited"] = True                     # 공관의 도움을 받았으면 도시에서 공항으로 갈 수 있다
     game.begin_turn()
     assert "한국행 항공권" in gamemaster.build_input(game, "한국행 비행기를 탄다")
     out = call(game, "travel", method="flight", distance_km=1)
@@ -741,6 +750,7 @@ def test_wanted_consequences(game, monkeypatch):
     game.place_type, game.money, game.wanted = "도시", 3000, 80
     game.vehicle = {"kind": "car", "name": "훔친 차", "speed": 70, "range_km": 300, "sea": False, "stolen": True}
     assert call(game, "buy_ticket", method="flight", distance_km=1)["success"]
+    game.flags["at_airport"] = True
     fix_roll(monkeypatch, 0.1)                                       # 0.1 < 0.8 → 공항에서 붙잡힘
     hours = game.elapsed_hours
     out = call(game, "travel", method="flight", distance_km=1)
@@ -932,3 +942,146 @@ def test_turn_output_is_korean(game, monkeypatch):
     monkeypatch.setattr(gamemaster, "get_client",
                         lambda: SimpleNamespace(responses=SimpleNamespace(create=lambda **k: next(replies))))
     assert gamemaster.run_turn(game, "길을 찾는다") == "당신은 곰곰이 길을 찾는다."
+
+
+# ---------- 10차 수정: 이야기의 개연성 / 목적지가 있는 이동 ----------
+from survival import leads as leads_module, places  # noqa: E402
+
+
+def test_clue_event_creates_lead_and_following_finds_it(game, monkeypatch):
+    game.turn = 1
+    monkeypatch.setattr(state_module, "roll_event",
+                        lambda *a, **k: {"kind": "lucky", "text": "멀리서 엔진 소리가 들린다.", "lead": "engine"})
+    game.begin_turn()
+    lead = game.leads[0]
+    assert game.event["lead_id"] == lead["id"] and game.event["direction"] == lead["direction"]
+    assert game.event["text"] == "멀리서 엔진 소리가 들린다."                  # 이벤트 문구는 그대로
+    titles = [n["title"] for n in gamemaster.collect_notices(game)]
+    assert len([x for x in titles if "엔진 소리" in x]) == 1 and titles[0].startswith("🧭")   # 알림은 하나로
+    assert any("엔진 소리" in f["text"] for f in game.facts)               # 이벤트는 사실로 남는다
+    text = gamemaster.build_input(game, "엔진 소리 쪽으로 간다")
+    assert "[단서" in text and lead["id"] in text and "[확정된 사실" in text
+    assert lead["target"] not in text                                     # 정체는 미리 알려 주지 않는다
+
+    game.turn_flags["travel"] = 0
+    start, hours = (game.lat, game.lon), game.elapsed_hours
+    out = call(game, "follow_lead", lead_id=lead["id"].lower())
+    assert out["success"] and not game.leads
+    assert geo.haversine_km(*start, game.lat, game.lon) == pytest.approx(lead["km"], abs=0.2)   # 정해 둔 거리
+    assert game.elapsed_hours > hours                                      # 걸어간 시간이 흐른다
+    expected = {"road": "도로", "village": "마을 입구", "logging": "벌목장"}[lead["target"]]
+    assert expected in game.scene_place and game.scene_dirty               # 정해 둔 정체가 나타나고 그림도 바뀐다
+    assert any("정체를 확인함" in f["text"] for f in game.facts)
+    assert any(n["title"].startswith("🔎") for n in gamemaster.collect_notices(game))
+
+
+def test_lead_target_is_fixed_and_fits_biome():
+    rng = random.Random(5)
+    for _ in range(200):
+        assert leads_module.make_lead("engine", "x", "desert", rng)["target"] != "logging"   # 사막에 벌목장은 없다
+        assert leads_module.make_lead("smoke", "x", "snow", rng)["target"] != "wildfire"
+    lead = leads_module.make_lead("light", "불빛", "forest", random.Random(1))
+    day = leads_module.reveal(dict(lead, target="village"), "forest", night=False, rng=random.Random(1))
+    night = leads_module.reveal(dict(lead, target="village"), "forest", night=True, rng=random.Random(1))
+    assert "오가고" in day["text"] and "잠들었" in night["text"]                 # 도착 시각에 따라 모습이 다르다
+    assert day["text"].startswith("불빛을 따라가자")
+    assert leads_module.eul("엔진 소리") == "엔진 소리를"                 # 도착 시각에 따라 모습이 다르다
+    road = leads_module.reveal(dict(lead, target="road"), "forest", night=True, rng=random.Random(1))
+    assert "거의 다니지 않는다" in road["text"] and "on_road" in road["effects"]
+    camp = leads_module.reveal(dict(lead, target="camp"), "desert", night=False)
+    assert camp["scene"] == "유목민 천막"                                       # 지형에 맞는 캠프
+
+
+def test_gm_added_lead_and_facts_persist_until_leaving(game):
+    game.begin_turn()
+    out = call(game, "add_lead", kind="herd", clue="언덕 너머에서 양 떼 방울 소리")
+    lead_id = out["단서"].split()[0]
+    assert game.find_lead(lead_id) and call(game, "add_lead", kind="herd", clue="언덕 너머에서 양 떼 방울 소리")
+    assert len(game.leads) == 1                                            # 같은 단서는 한 번만
+    call(game, "remember", fact="여관 주인은 내일 아침 6시에 트럭이 떠난다고 했다", scope="here")
+    call(game, "remember", fact="한국인 김씨에게 연락처를 받았다", scope="always")
+    assert len(game.facts) == 2
+    game.begin_turn()
+    call(game, "travel", method="hitchhike", distance_km=200) if False else game._relocate(*geo.move_toward_korea(game.lat, game.lon, 200), 200, "bus")
+    assert game.leads == [] and [f["text"] for f in game.facts] == ["한국인 김씨에게 연락처를 받았다"]
+
+
+def test_road_makes_hitchhiking_easier(game, monkeypatch):
+    game.flags["on_road"] = True
+    fix_roll(monkeypatch, 0.80)                         # 숲 야생 기본 60% → 도로 위 85%
+    game.begin_turn()
+    assert game.travel("hitchhike", 100)["success"]
+
+
+def test_ride_offers_go_to_real_places_not_just_toward_korea(game):
+    from survival.events import MAJOR_EVENTS
+
+    def plan(offer_id, state):
+        e = next(x for x in MAJOR_EVENTS if x["id"] == offer_id)
+        return state.plan_offer({"id": offer_id, "text": e["text"], "accept": e["accept"], "hours": 0, "stats": {},
+                                 "items": [], "money": 0, "risk": "", "bad": dict(e["bad"]), "move": dict(e["move"])})
+
+    # 알래스카 야생 → 구조 헬기는 가까운 도시(페어뱅크스)로. 한국 쪽이 아니다
+    alaska = GameState(lat=64.5, lon=-147.0, place_name="알래스카", weather=fake_weather(), biome="snow",
+                       distance=geo.distance_to_korea(64.5, -147.0))
+    offer = plan("rescue", alaska)
+    assert offer["dest"]["name"] == "페어뱅크스" and "페어뱅크스" in offer["text"] and "km" in offer["detail"]
+    # 도시가 멀면 근처 마을로
+    remote = GameState(lat=20.0, lon=0.0, place_name="사하라", weather=fake_weather(), biome="desert",
+                       distance=geo.distance_to_korea(20.0, 0.0))
+    offer = plan("rescue", remote)
+    assert offer["dest"]["place"] == "마을" and 30 <= offer["dest"]["km"] <= 120
+
+
+def test_embassy_then_airport_flow(game):
+    game.place_type, game.country_code = "야생", "mn"
+    game.begin_turn()
+    assert call(game, "seek_help", kind="embassy")["success"] is False      # 야생에서는 연락할 방법이 없다
+    game.flags["can_call"] = True                                            # 신호가 잡히는 언덕에 올랐다
+    out = call(game, "seek_help", kind="embassy")
+    assert out["success"] and "울란바토르의 대한민국 대사관" in game.offer["text"]
+
+    game.place_type = "도시"
+    assert call(game, "seek_help", kind="airport")["success"] is False       # 1일차·공관 전에는 공항 불가
+    game.money = 3000
+    game.flags["at_airport"] = False
+    assert game.travel("flight", 1)["success"] is False                      # 비행기도 탈 수 없다
+
+    random.seed(3)
+    state_module.random.seed(3)
+    game.offer["turn"] = game.turn
+    game.begin_turn()
+    game.offer["bad"]["chance"] = 0
+    out = call(game, "accept_offer")
+    assert out["success"] and game.flags["embassy_visited"] and "여행증명서" in game.items
+    assert game.indoor and "공관" in game.scene_place and game.place_type == "도시"
+    assert any(f["scope"] == "always" and "영사 지원" in f["text"] for f in game.facts)
+
+    game.begin_turn()
+    out = call(game, "seek_help", kind="airport")                            # 공관을 다녀왔으니 이제 공항 가능
+    assert out["success"] and "국제공항" in game.offer["text"]
+    game.offer["bad"]["chance"] = 0
+    game.offer["turn"] = game.turn
+    game.begin_turn()
+    call(game, "accept_offer")
+    assert game.flags["at_airport"] and "공항" in game.scene_place
+    game.begin_turn()
+    assert call(game, "travel", method="flight", distance_km=1)["arrived_in_korea"]
+
+
+def test_airport_opens_after_enough_days(game):
+    game.place_type = "도시"
+    assert "airport" not in game.offer_needs()
+    game.elapsed_hours = 24 * 5
+    assert "airport" in game.offer_needs()
+    game.place_type = "마을"
+    assert "airport" not in game.offer_needs()
+
+
+def test_city_data_is_sane():
+    assert len(places.CITY_LIST) > 200
+    for c in places.CITY_LIST:
+        assert -60 < c["lat"] < 75 and -180 <= c["lon"] <= 180 and c["mission"] in ("", "대", "영")
+    near = places.nearest_city(-23.9, 133.5)
+    assert near["name"] == "앨리스스프링스" and near["km"] < 50
+    assert places.nearest_city(20.0, 0.0, max_km=100) is None

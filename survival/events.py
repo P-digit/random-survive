@@ -189,7 +189,7 @@ EVENTS = [
     # ===== 야생 공통 =====
     E("lucky", "누군가 버리고 간 배낭을 발견했다.", places=W),
     E("lucky", "빗물을 받아 둘 수 있겠다.", places=W, weather=("rain",)),
-    E("neutral", "멀리서 연기가 가늘게 피어오른다. 사람이 있다는 뜻이다.", places=W, time="day"),
+    E("neutral", "멀리서 연기가 가늘게 피어오른다.", places=W, time="day"),
     E("neutral", "어둠 너머 멀리에서 희미한 불빛 하나가 깜빡인다.", places=W, time="night"),
     E("neutral", "스마트폰에 아주 약한 신호가 잠깐 잡혔다.", places=W),
     E("danger", "발을 헛디뎌 발목을 접질렸다.", places=W),
@@ -251,7 +251,7 @@ EVENTS += [
       places=W, biomes=("snow",), time="day"),
     E("lucky", "바람에 눈이 단단히 다져진 언덕이 있다. 눈굴을 파기에 좋다.", places=W, biomes=("snow",)),
     E("lucky", "말라 죽은 관목이 눈 위로 삐죽 나와 있다. 불쏘시개로 쓸 수 있다.", places=W, biomes=("snow", "alpine")),
-    E("lucky", "멀리서 개 썰매 방울 소리가 들린다. 사람이 오가는 길이 가깝다.", places=W, biomes=("snow",), time="day"),
+    E("lucky", "멀리서 개 썰매 방울 소리가 들린다.", places=W, biomes=("snow",), time="day"),
     E("lucky", "흐린 하늘이 걷히자 해가 낮게 떠 남쪽 방향이 분명해졌다.", places=W, biomes=("snow", "alpine", "forest"),
       time="day", weather=("clear",)),
 
@@ -269,7 +269,7 @@ EVENTS += [
       places=W, biomes=("desert", "savanna"), time="night"),
     E("lucky", "모래에 반쯤 묻힌 플라스틱 물통을 찾았다. 안에 물이 조금 남아 있다.", places=W, biomes=("desert",)),
     E("lucky", "선인장처럼 물을 머금은 다육식물 군락이 있다.", places=W, biomes=("desert",)),
-    E("lucky", "멀리 송전탑이 일렬로 서 있다. 따라가면 도로나 마을이 나온다.", places=W, biomes=("desert", "savanna", "snow")),
+    E("lucky", "멀리 송전탑이 일렬로 서 있다.", places=W, biomes=("desert", "savanna", "snow")),
     E("lucky", "모래 위에 덤불 그림자가 길게 드리워 방향을 읽을 수 있다.", places=W, biomes=("desert",), time="day"),
     E("lucky", "해가 지자 열기가 가셔 걷기 좋은 시간이 되었다. 밤하늘 별이 길잡이가 된다.",
       places=W, biomes=("desert",), time="night", weather=("clear",)),
@@ -303,7 +303,7 @@ EVENTS += [
 
     # ===== 야생 공통 =====
     E("lucky", "밤새 내린 비로 바위 웅덩이마다 깨끗한 물이 찰랑거린다.", places=W, weather=("rain",), time="day"),
-    E("lucky", "멀리서 엔진 소리가 들린다. 차가 다니는 길이 가까이 있다.", places=W, time="day"),
+    E("lucky", "멀리서 엔진 소리가 들린다. 바람을 타고 끊겼다 이어지기를 반복한다.", places=W, time="day"),
     E("lucky", "바람이 잦아들고 하늘이 맑게 갰다. 오늘은 멀리까지 걸을 수 있겠다.", places=W, weather=("clear",), temp="mild"),
 
     # ===== 마을 (낮) =====
@@ -346,6 +346,25 @@ EVENTS += [
     E("lucky", "옆자리 트럭 기사가 내일 아침 당신이 가려는 방향으로 간다고 말한다.", places=SETTLED, indoor=True),
     E("lucky", "주인이 남은 수프를 데워 내준다.", places=SETTLED, indoor=True, time="night"),
 ]
+
+# ---------- 단서가 되는 이벤트 ----------
+# 이 이벤트들은 '무언가가 저쪽에 있다'는 단서다. 이벤트가 일어나면 엔진이 그 정체·방향·거리를 정해 두고(leads.py),
+# 플레이어가 따라가면 반드시 그것이 나타난다. (앞의 것이 먼저 맞으면 그것을 쓴다)
+LEAD_HINTS = [
+    ("마을 불빛", "settlement"), ("마을의 지붕", "settlement"), ("엔진 소리", "engine"),
+    ("설상차", "tracks"), ("타이어 자국", "tracks"), ("바퀴 자국", "tracks"), ("연기가 가늘게", "smoke"),
+    ("모닥불 흔적", "trail"), ("불빛", "light"), ("송전탑", "power"), ("강물 소리", "river"),
+    ("플라스틱 병", "river"), ("돌무더기 표지", "trail"), ("붉은 페인트", "trail"), ("칼로 낸 표시", "trail"),
+    ("임도", "trail"), ("메모가 있다", "trail"), ("낡은 지도", "trail"), ("개 썰매", "herd"),
+    ("방울 소리", "herd"), ("순록 떼", "herd"), ("야크", "herd"), ("목동의 움막", "herd"),
+    ("손짓하며 부른다", "herd"), ("전기톱", "chainsaw"), ("대상 행렬", "caravan"),
+    ("아주 약한 신호", "signal"), ("개코원숭이", "water"),
+]
+for _event in EVENTS:
+    for _hint, _kind in LEAD_HINTS:
+        if _hint in _event["text"] and "야생" in _event.get("places", W):
+            _event["lead"] = _kind
+            break
 
 # 위험 등급(0 안전, 1 주의, 2 위험)별 이벤트 발생 확률과 '위험 이벤트' 비중
 EVENT_CHANCE = {0: 0.20, 1: 0.40, 2: 0.60}
@@ -394,7 +413,10 @@ def roll_event(biome, place_type, risk_level, rng=random, context=None):
     chosen = [e for e in pool if (e["kind"] == "danger") == want_danger] or pool
     weights = [1 + sum(k in e for k in ("time", "weather", "temp", "season")) * 1.5 for e in chosen]
     event = rng.choices(chosen, weights=weights, k=1)[0]
-    return {"kind": event["kind"], "text": event["text"]}
+    result = {"kind": event["kind"], "text": event["text"]}
+    if event.get("lead") and place_type == "야생":
+        result["lead"] = event["lead"]
+    return result
 
 
 # ---------- 대형 이벤트(기회) ----------
@@ -409,27 +431,27 @@ def roll_event(biome, place_type, risk_level, rng=random, context=None):
 #        money_frac(약속된 돈 중 받는 비율), lose_money_frac(가진 돈을 잃는 비율), lose_item
 MAJOR_EVENTS = [
     {"id": "trucker", "where": ["야생", "마을", "도시"], "outdoor_only": True,
-     "text": "장거리 화물 트럭이 속도를 줄이더니 멈춰 선다. 기사가 마침 가는 길이라며 태워 주겠다고 한다.",
-     "accept": "트럭에 올라탄다", "ride_km": (200, 500), "speed": 60, "dest": "마을",
-     "risk": "낯선 사람의 차다. 어디로 데려갈지는 타 봐야 안다",
+     "text": "장거리 화물 트럭이 속도를 줄이더니 멈춰 선다. 기사는 {dest}까지 간다며 태워 주겠다고 한다.",
+     "accept": "트럭에 올라탄다", "move": {"to": "city_or_village", "max_km": 500, "speed": 60},
+     "risk": "낯선 사람의 차다. 정말 그곳으로 데려갈지는 타 봐야 안다",
      "bad": {"chance": 0.30, "ride_frac": 0.2, "dest": "야생", "lose_money_frac": 0.7,
              "stats": {"health": -10},
              "text": "기사는 인적 없는 곳에 차를 세우더니 돈을 요구했다. 가진 돈 대부분을 빼앗기고 길가에 버려졌다."}},
     {"id": "convoy", "where": ["야생", "마을"], "outdoor_only": True,
-     "text": "구호단체 차량 행렬이 당신을 발견하고 멈춘다. 큰 도시의 본부까지 데려다주겠다고 한다.",
-     "accept": "구호 차량에 탄다", "ride_km": (300, 700), "speed": 60, "dest": "도시",
+     "text": "구호단체 차량 행렬이 당신을 발견하고 멈춘다. {dest}에 있는 본부까지 데려다주겠다고 한다.",
+     "accept": "구호 차량에 탄다", "move": {"to": "city_or_village", "max_km": 700, "speed": 55},
      "stats": {"satiety": 30, "hydration": 40},
-     "risk": "분쟁 지역을 지나는 길이라 끝까지 간다는 보장은 없다",
+     "risk": "치안이 불안한 길을 지난다. 끝까지 간다는 보장은 없다",
      "bad": {"chance": 0.20, "ride_frac": 0.4, "dest": "야생", "hours": 5,
              "text": "행렬은 도중에 무장 검문소에 막혀 되돌아가야 했다. 당신은 허허벌판 중간 지점에 내려야 했다."}},
     {"id": "rescue", "where": ["야생"], "extreme_only": True, "outdoor_only": True,
-     "text": "수색 중이던 구조 헬기가 당신을 발견하고 내려온다. 가장 가까운 마을까지 이송해 주겠다고 한다.",
-     "accept": "구조 헬기에 탄다", "ride_km": (100, 250), "speed": 200, "dest": "마을",
+     "text": "수색 중이던 구조 헬기가 당신을 발견하고 내려온다. {dest}까지 이송해 주겠다고 한다.",
+     "accept": "구조 헬기에 탄다", "move": {"to": "rescue", "max_km": 300, "speed": 200},
      "stats": {"health": 30, "satiety": 30, "hydration": 40},
      "risk": "민간 구조대다. 이송 비용을 청구할 수 있다",
-     "bad": {"chance": 0.20, "ride_frac": 1.0, "dest": "마을", "lose_money_frac": 0.6,
+     "bad": {"chance": 0.20, "ride_frac": 1.0, "lose_money_frac": 0.6,
              "stats": {"health": 30, "satiety": 30, "hydration": 40},
-             "text": "무사히 이송되었지만, 착륙하자마자 거액의 구조 비용이 청구되었다. 가진 돈의 절반 이상이 사라졌다."}},
+             "text": "무사히 이송되었지만, 내리자마자 거액의 구조 비용이 청구되었다. 가진 돈의 절반 이상이 사라졌다."}},
     {"id": "supply", "where": ["야생"], "outdoor_only": True,
      "text": "낙하산이 달린 구호물자 상자가 근처에 떨어져 있다. 봉인은 뜯기지 않았다.",
      "accept": "보급 상자를 연다", "hours": 0.5,
@@ -452,15 +474,23 @@ MAJOR_EVENTS = [
      "risk": "얼굴이 알려지면 당국의 눈에도 띈다",
      "bad": {"chance": 0.25, "hours": 10, "money": -40, "stats": {"energy": -20},
              "text": "방송이 나간 직후 이민 당국이 찾아왔다. 긴 조사 끝에 벌금을 내고서야 풀려났고, 출연료는 받지 못했다."}},
-    {"id": "embassy", "where": ["도시"],
-     "text": "대한민국 영사관과 연락이 닿았다. 담당 영사가 긴급 지원금을 전달해 주겠다고 한다.",
-     "accept": "영사관의 도움을 받는다", "hours": 4, "money": (150, 300),
+    {"id": "embassy", "where": ["마을", "도시"], "needs": "contact",
+     "text": "{dest} 영사과와 연락이 닿았다. 담당 영사가 그곳까지 오는 교통편을 마련해 주고, 도착하면 "
+             "여행증명서와 긴급 지원금을 주겠다고 한다.",
+     "accept": "공관으로 간다", "move": {"to": "embassy", "max_km": 3500, "speed": 250},
+     "money": (150, 300), "items": ["여행증명서"],
      "risk": "서류 절차가 얼마나 걸릴지 모른다",
-     "bad": {"chance": 0.20, "hours": 24, "money_frac": 0.3, "stats": {"energy": -10},
-             "text": "신원 확인과 서류 절차에 꼬박 하루가 걸렸고, 지원금은 약속된 금액의 일부만 나왔다."}},
+     "bad": {"chance": 0.20, "ride_frac": 1.0, "hours": 24, "money_frac": 0.3, "stats": {"energy": -10},
+             "text": "공관에는 도착했지만 신원 확인과 서류 절차에 꼬박 하루가 걸렸고, 지원금은 약속된 금액의 일부만 나왔다."}},
+    {"id": "airport", "where": ["도시"], "needs": "airport",
+     "text": "{dest} 국제공항으로 가는 차편이 생겼다. 공항까지 데려다주겠다고 한다.",
+     "accept": "공항으로 간다", "move": {"to": "airport", "max_km": 400, "speed": 70},
+     "risk": "공항까지 가는 길에 무슨 일이 생길지 모른다",
+     "bad": {"chance": 0.20, "ride_frac": 1.0, "lose_money_frac": 0.3,
+             "text": "공항에는 도착했지만, 차에서 내리는 사이 지갑에서 돈 일부가 사라졌다."}},
     {"id": "cargo", "where": ["도시"], "outdoor_only": True,
-     "text": "한국 방향으로 떠나는 화물선의 선장이 일손이 부족하다며, 갑판 일을 도우면 태워 주겠다고 한다.",
-     "accept": "화물선에 오른다", "ride_km": (1200, 2500), "speed": 35, "dest": "도시",
+     "text": "한국 쪽으로 가는 화물선의 선장이 일손이 부족하다며, 갑판 일을 도우면 {dest}까지 태워 주겠다고 한다.",
+     "accept": "화물선에 오른다", "move": {"to": "port_toward_korea", "max_km": 2500, "speed": 35},
      "stats": {"energy": -25, "satiety": 30, "hydration": 30},
      "risk": "먼바다의 날씨와 선상 노동은 만만치 않다",
      "bad": {"chance": 0.30, "ride_frac": 0.4, "dest": "도시", "stats": {"health": -25, "energy": -40},
@@ -468,32 +498,28 @@ MAJOR_EVENTS = [
 ]
 
 
-def roll_major_event(place_type, extreme, indoor=False, rng=random):
-    """현재 장소·장면에서 일어날 수 있는 대형 이벤트를 하나 뽑아 '제안'으로 만든다. 없으면 None."""
+def roll_major_event(place_type, extreme, indoor=False, rng=random, allowed_needs=()):
+    """현재 장소·장면에서 일어날 수 있는 대형 이벤트를 하나 뽑아 '제안'으로 만든다. 없으면 None.
+
+    목적지({dest})는 아직 정하지 않는다. 게임 상태(위치, 가까운 도시)가 필요하므로 state 가 정한다.
+    allowed_needs: 조건이 붙은 이벤트 중 지금 허용되는 것 ('contact': 공관과 연락 가능, 'airport': 공항 허용)
+    """
     pool = [e for e in MAJOR_EVENTS
             if place_type in e["where"]
             and (extreme or not e.get("extreme_only"))
-            and not (indoor and e.get("outdoor_only"))]
+            and not (indoor and e.get("outdoor_only"))
+            and (not e.get("needs") or e["needs"] in allowed_needs)]
     if not pool:
         return None
     if extreme:   # 극한 지형에서는 구조·보급이 더 잘 나온다
         pool += [e for e in pool if e["id"] in ("rescue", "supply")]
+    if allowed_needs:   # 귀환에 결정적인 기회(공관·공항)는 조건이 되면 더 잘 나온다
+        pool += [e for e in pool if e.get("needs")] * 2
     event = rng.choice(pool)
     offer = {"id": event["id"], "text": event["text"], "accept": event["accept"],
              "hours": event.get("hours", 0), "stats": dict(event.get("stats", {})),
-             "items": list(event.get("items", [])), "ride_km": 0, "money": 0,
-             "risk": event["risk"], "bad": dict(event["bad"])}
-    details = []
-    if "ride_km" in event:
-        offer["ride_km"] = int(rng.randint(*event["ride_km"]) // 10 * 10)
-        offer["speed"], offer["dest"] = event["speed"], event["dest"]
-        details.append(f"한국 방향으로 약 {offer['ride_km']:,}km 무료 이동")
+             "items": list(event.get("items", [])), "money": 0,
+             "risk": event["risk"], "bad": dict(event["bad"]), "move": dict(event.get("move", {}))}
     if "money" in event:
         offer["money"] = int(rng.randint(*event["money"]) // 10 * 10)
-        details.append(f"${offer['money']} 획득")
-    if offer["stats"]:
-        details.append("몸 상태 회복" if sum(offer["stats"].values()) > 0 else "기력 소모")
-    if offer["items"]:
-        details.append("물품: " + ", ".join(offer["items"]))
-    offer["detail"] = " · ".join(details)
     return offer
