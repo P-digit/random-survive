@@ -35,6 +35,11 @@ INSTRUCTIONS = """
   엔진이 이동을 거절하면 그 이유를 자연스럽게 서술한다.
 
 [귀환으로 이어지는 길 - 끌지 않는다]
+- 이동 툴(go_to, follow_lead, travel)은 플레이어가 그곳으로 가겠다고 말했을 때만 쓴다. "쉴 곳을 찾는다",
+  "물을 찾는다"처럼 주변에서 무언가를 찾는 행동은 이동이 아니다. 지금 있는 곳 근처에서 찾고(advance_time),
+  찾은 곳으로 옮겼다면 set_scene 으로 그 장소(나무 그늘, 바위 틈 등)를 정한다. 장소유형(야생/마을/도시)은
+  그대로다.
+- 이동 툴을 썼다면 서술은 엔진이 돌려준 도착지에서 끝나야 한다. 원래 자리에 머문 것처럼 쓰지 않는다.
 - 플레이어가 목적지를 정해 가려 하면 go_to 를 호출한다: 가장 가까운 마을(village), 도시(city),
   한국 공관(embassy), 공항(airport). 엔진이 지금 상황(야생·마을·도시, 탈것, 돈, 밤낮)에서 현실적으로 갈 수
   있는 만큼만 이동시킨다. 오지에서 갑자기 공관이나 도시에 나타나는 일은 없다. 곧장 갈 수 없으면 엔진이
@@ -367,6 +372,47 @@ def ensure_korean(client, text, allowed=()):
     return strip_foreign(text, allowed)
 
 
+def scene_words(state):
+    """지금 장면을 가리키는 말들: 장면 이름의 낱말, 보이는 것, 장소 유형."""
+    words = [w for w in state.scene_place.split() if len(w) >= 2]
+    for feature in state.scene_features:
+        words += [w for w in feature.split() if len(w) >= 2]
+    if state.place_type in ("마을", "도시"):
+        words.append(state.place_type)
+    return [w for w in words if w not in ("앞", "안", "밖", "근처", "가장자리")]
+
+
+def ensure_scene(client, text, state):
+    """이번 턴에 장소가 바뀌었는데 서술에 새 장소가 나오지 않으면, 엔진의 장면에 맞게 서술을 고친다.
+
+    (엔진은 이미 플레이어를 옮겼고 그림도 그곳을 그린다. 서술이 옛 장소에 머물면 그림과 어긋난다)
+    """
+    if not state.turn_flags.get("scene_changed") or not state.scene_place or state.status != "playing":
+        return text
+    words = scene_words(state)
+    body = re.sub(r"^\s*▶.*$", "", text, flags=re.MULTILINE)
+    if not words or any(w in body for w in words):
+        return text
+    where = (f"{'실내' if state.indoor else '야외'} · {state.scene_place} ({state.place_type})"
+             + (f" · 보이는 것: {', '.join(state.scene_features)}" if state.scene_features else ""))
+    try:
+        response = client.responses.create(
+            model=LLM_MODEL,
+            max_output_tokens=900,
+            instructions="다음 게임 서술을 고쳐라. 플레이어는 이번 턴에 아래 장소로 이동했다(이미 확정된 사실). "
+                         "서술이 반드시 이 장소에 도착한 장면으로 끝나게 하고, 이 장소의 이름이나 보이는 것을 "
+                         "직접 언급하라. 이 장소와 맞지 않는 내용은 지운다. 한국어, 2인칭 현재형, **굵은 글씨**와 "
+                         "'▶'로 시작하는 줄의 형식은 그대로 둔다. 고친 글만 출력한다.\n[지금 장소] " + where,
+            input=text,
+        )
+        fixed = (response.output_text or "").strip()
+        if fixed and any(w in fixed for w in words) and fixed.count("▶") == text.count("▶"):
+            return fixed
+    except Exception as e:
+        print(f"[장면] 서술 고치기 실패: {e}")
+    return f"*📍 지금 위치: {state.scene_place} ({state.place_type})*\n\n" + text
+
+
 def collect_notices(state):
     """이번 턴에 일어난 중요한 일을 모은다. 대화창 맨 위에 눈에 띄는 알림으로 표시된다."""
     notices = []
@@ -502,6 +548,7 @@ def run_turn(state, player_text=None):
                            "OPENAI_API_KEY=sk-... 형태로 실제 키를 넣고 프로그램을 다시 실행하세요.")
 
     state.begin_turn()
+    state.turn_flags["player_text"] = player_text or ""
     if player_text is None:
         state.event = None   # 시작 턴에는 돌발 이벤트 없음
     def first_call(previous_id, recap=None):
@@ -558,6 +605,7 @@ def run_turn(state, player_text=None):
     state.notices = collect_notices(state)
     # 지명(현지 문자일 수 있음)은 그대로 두고, 서술에 섞인 다른 언어만 고친다
     text = ensure_korean(client, response.output_text or "", allowed=(state.place_name, state.scene_place))
+    text = ensure_scene(client, text, state)
     body, suggestions = split_suggestions(text)
     if not body:
         body = "(잠시 정신이 아득해진다. 다시 행동을 정해 보자.)"
