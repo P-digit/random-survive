@@ -90,9 +90,12 @@ def needs_new_image(state):
 def draw_scene(state):
     mode = image_update(state)
     if mode == "edit":
-        path = imagegen.edit_scene(get_client(), state, state.image_path)
+        # 편집도 그림을 다시 읽어 확인한다. 장면에 없던 건물이 생기면 그 편집본은 버린다(이전 그림 유지).
+        path, seen = imagegen.checked_edit(get_client(), state, state.image_path)
         if path:
-            state.image_path = path    # 같은 장면이라 보이는 것(scene_seen)은 그대로 둔다
+            state.image_path = path
+            # 화면에 걸린 그림에 보이는 것은 GM도 알아야 한다 (그림에 보이면 들어가거나 다가갈 수 있다)
+            state.scene_seen = list(dict.fromkeys(list(state.scene_seen) + list(seen or [])))[:10]
     elif mode == "new":
         path = imagegen.generate_scene(get_client(), state)
         if path:

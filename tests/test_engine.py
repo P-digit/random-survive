@@ -1585,3 +1585,65 @@ def test_requested_move_phrasings_are_allowed(game):
     for text in ["연기 쪽으로 간다", "연기를 향해 걷는다", f"{lead['direction']}으로 걸어간다", "그쪽으로 가 보자"]:
         game.turn_flags["player_text"] = text
         assert tools_module.player_asked_for(game, "follow_lead", {"lead_id": lead["id"]}), text
+
+
+# ---------- 16차 수정: 밤으로 바뀔 때 그림에 없던 건물이 생기는 문제 ----------
+def test_added_structures_detects_new_buildings():
+    known = ["넓은 초원", "큰 나무", "큰 나무 아래"]
+    assert imagegen.added_structures(known, ["큰 나무", "불 켜진 오두막", "초원"]) == ["불 켜진 오두막"]
+    assert imagegen.added_structures(known, ["큰 나무", "별이 뜬 하늘", "풀밭"]) == []      # 구조물이 아니면 괜찮다
+    assert imagegen.added_structures(["버려진 오두막"], ["오두막", "통나무 오두막"]) == []      # 원래 있던 것
+
+
+def fake_image_client(descriptions, edits):
+    import base64
+    replies = iter(descriptions)
+
+    def edit(**kw):
+        edits.append(kw["prompt"])
+        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(b"png").decode())])
+
+    return SimpleNamespace(images=SimpleNamespace(edit=edit),
+                           responses=SimpleNamespace(create=lambda **k: SimpleNamespace(output_text=next(replies))))
+
+
+def test_checked_edit_retries_then_discards(game, tmp_path):
+    prev = tmp_path / "day.png"
+    prev.write_bytes(b"day")
+    game.set_scene("outdoor", "큰 나무 아래", "A large tree in the savanna.", ["큰 나무"])
+    game.scene_seen = ["큰 나무", "초원"]
+
+    edits = []                                      # 1차: 오두막이 생김 → 2차(엄격): 깨끗함 → 받아들임
+    client = fake_image_client(["큰 나무, 불 켜진 오두막", "큰 나무, 밤하늘"], edits)
+    path, seen = imagegen.checked_edit(client, game, str(prev))
+    assert path and seen == ["큰 나무", "밤하늘"] and len(edits) == 2 and "STRICT" in edits[1]
+    assert "Do not add any building" in edits[0]
+
+    edits = []                                      # 두 번 다 생기면 편집본을 버린다
+    client = fake_image_client(["큰 나무, 오두막", "큰 나무, 오두막"], edits)
+    assert imagegen.checked_edit(client, game, str(prev)) == (None, None)
+
+
+def test_draw_scene_keeps_old_image_or_shares_what_is_visible(game, monkeypatch):
+    app = load_app(monkeypatch)
+    game.set_scene("outdoor", "큰 나무 아래", "A large tree.", ["큰 나무"])
+    game.image_path, game.scene_dirty = "/tmp/day.png", False
+    game.image_scene, game.image_night = app.scene_key(game), not game.is_night       # 낮밤이 바뀐 상황
+    game.image_weather = imagegen.weather_category(game.weather.get("code", 0))
+    monkeypatch.setattr(app.savegame, "save", lambda s: None)
+
+    monkeypatch.setattr(app.imagegen, "checked_edit", lambda c, s, p: (None, None))   # 건물이 생겨 버림
+    app.draw_scene(game)
+    assert game.image_path == "/tmp/day.png"                                         # 이전 그림 유지
+
+    game.image_night = not game.is_night
+    monkeypatch.setattr(app.imagegen, "checked_edit", lambda c, s, p: ("/tmp/night.png", ["큰 나무", "달"]))
+    app.draw_scene(game)
+    assert game.image_path == "/tmp/night.png" and "달" in game.scene_seen          # 보이는 것은 GM에게 전달
+    assert "달" in gamemaster.build_input(game, "주변을 본다")
+
+
+def test_night_wild_prompt_forbids_new_lights(game):
+    game.place_type, game.start_hour, game.elapsed_hours = "야생", 21, 0
+    game.set_scene("outdoor", "초원", "Open grassland.", ["풀"])
+    assert "do not add lit windows" in imagegen.build_prompt(game)
