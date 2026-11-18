@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import climate as climate_api
-from . import geo
+from . import geo, leads as leads_api, places
 from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CRIMES,
                      DIURNAL_AMPLITUDE, LAND_METHODS, WITNESS,
                      MAJOR_EVENT_CHANCE, VEHICLES, WANTED_AIRPORT_LIMIT, WANTED_DECAY_PER_HOUR,
@@ -101,6 +101,12 @@ class GameState:
     notices: list = field(default_factory=list)          # 이번 턴의 중요 알림 (대화창 표시용)
     tickets: list = field(default_factory=list)          # 예약(결제)해 둔 교통편. 탈 때까지 계속 기억한다
     vehicle: dict | None = None       # 손에 넣은 탈것 (탈취, 구매 등)
+    country_code: str = ""            # 지금 있는 나라 (가까운 공관 찾기용)
+    # 이야기의 개연성: 아직 확인하지 않은 단서와, 이미 확정된 사실
+    leads: list = field(default_factory=list)            # [{id, kind, label, clue, target, km, bearing, ...}]
+    lead_seq: int = 0
+    facts: list = field(default_factory=list)            # [{text, scope: here/always, turn}]
+    flags: dict = field(default_factory=dict)            # on_road, can_call, embassy_visited, at_airport
     wanted: float = 0.0               # 수배도 0~100
     _snapshot: dict = field(default_factory=dict)
 
@@ -348,6 +354,75 @@ class GameState:
                 self.items.append(name)
         return rejected
 
+    # ---------- 이야기의 개연성: 사실과 단서 ----------
+    def remember(self, text, scope="here"):
+        """확정된 사실을 기록한다. here: 이 장소에서만 유효(이동하면 지움), always: 게임 내내 유효."""
+        text = str(text).strip()[:120]
+        if not text or any(f["text"] == text for f in self.facts):
+            return
+        scope = scope if scope in ("here", "always") else "here"
+        self.facts.append({"text": text, "scope": scope, "turn": self.turn})
+        for s, limit in (("here", 12), ("always", 12)):        # 너무 길어지지 않게 오래된 것부터 지운다
+            same = [f for f in self.facts if f["scope"] == s]
+            for old in same[:-limit]:
+                self.facts.remove(old)
+
+    def add_lead(self, kind, clue, bearing=None):
+        """단서를 기록한다. 정체·방향·거리는 지금 정해지고, 따라가면 그대로 나타난다."""
+        if kind not in leads_api.LEAD_KINDS:
+            return None
+        for lead in self.leads:                                   # 같은 단서를 두 번 만들지 않는다
+            if lead["kind"] == kind and lead["clue"] == str(clue)[:80]:
+                return lead
+        self.lead_seq += 1
+        lead = leads_api.make_lead(kind, clue, self.biome, bearing=bearing)
+        lead.update(id=f"L{self.lead_seq}", turn=self.turn,
+                    direction=leads_api.compass(lead["bearing"]))
+        self.leads.append(lead)
+        self.leads = self.leads[-5:]
+        self.turn_flags["new_lead"] = lead["id"]
+        return lead
+
+    def find_lead(self, lead_id):
+        return next((l for l in self.leads if l["id"] == str(lead_id).strip().upper()), None)
+
+    def follow_lead(self, lead_id):
+        """단서를 따라간다. 미리 정해 둔 정체가 그 방향·거리에 반드시 있다."""
+        lead = self.find_lead(lead_id)
+        if lead is None:
+            return {"success": False, "message": f"그런 단서({lead_id})는 없다. [단서] 목록의 id 를 써라."}
+        if self.turn_flags.get("travel"):
+            return {"success": False, "message": "이번 턴에는 이미 이동했다."}
+        speed = self.hazard["walk_speed"] if self.place_type == "야생" else 4.0
+        if self.is_night:
+            speed *= 0.65                                         # 밤에는 더디다
+        if self.vehicle and self.vehicle.get("kind") != "boat":
+            speed = max(speed, 25.0)                              # 탈것이 있으면 금방 간다
+        hours = round(lead["km"] / speed, 2)
+        self.pass_time(hours, "walk" if speed < 10 else "ride", sheltered=speed >= 10)
+        self.turn_flags["travel"] = 1
+        self.turn_flags["time"] = 1
+        if self.status != "playing":
+            return {"success": False, "message": "가는 도중 쓰러졌다."}
+        self.lat, self.lon = geo.destination(self.lat, self.lon, lead["bearing"], lead["km"])
+        found = leads_api.reveal(lead, self.biome, self.is_night)
+        before = self.place_type
+        self.place_type = found["place_type"]
+        self.set_scene(found["setting"], found["scene"], found["description_en"], found["features"])
+        if before != self.place_type:
+            self.scene_dirty = True
+        for effect in found["effects"]:
+            if effect in ("on_road", "can_call"):
+                self.flags[effect] = True
+        self.leads.remove(lead)
+        self.remember(f"{lead['direction']} {lead['km']}km를 걸어 {lead['label']}의 정체를 확인함: {found['text']}")
+        self.turn_flags["lead_result"] = {"label": lead["label"], "scene": found["scene"], "text": found["text"],
+                                          "hours": hours, "danger": "danger" in found["effects"]}
+        return {"success": True, "걸린_시간": f"{hours:.1f}시간", "도착한_곳": found["scene"],
+                "장소유형": self.place_type, "확정된_사실": found["text"],
+                "보이는_것": found["features"],
+                "안내": "이 사실과 어긋나지 않게 도착 장면을 서술하라. 장면은 엔진이 이미 바꿨으니 set_scene 은 부르지 않는다."}
+
     # ---------- 자유 행동 ----------
     def attempt(self, action, difficulty="normal", crime="none", witnessed="none", violent=False,
                 item="", stealth=False):
@@ -431,6 +506,7 @@ class GameState:
                         "sea": spec["sea"], "stolen": attempt["illegal"]}
         if self.offer and self.offer.get("id") in ("trucker", "convoy"):
             self.offer = None             # 태워 주겠다던 차를 빼앗았다면 그 제안은 끝난 것이다
+        self.remember(f"{label}을(를) 손에 넣음" + (" (훔친 것)" if attempt["illegal"] else ""), "always")
         self.turn_flags["vehicle"] = dict(self.vehicle)
         return {"success": True,
                 "message": f"{label}을(를) 손에 넣었다. 연료로 약 {fuel}km를 갈 수 있다. "
@@ -549,10 +625,19 @@ class GameState:
         if cost > self.money:
             return {"success": False,
                     "message": f"돈이 부족하다. {rule['label']} {km:.0f}km 요금 ${cost:.0f}, 보유 ${self.money:.0f}."}
+        if method == "flight" and not self.flags.get("at_airport") and "airport" not in self.offer_needs():
+            return {"success": False,
+                    "message": "이 도시에서 국제선 비행기를 탈 방법을 아직 찾지 못했다. 한국 공관의 도움을 받거나 "
+                               "며칠 더 버틴 뒤 공항으로 가는 길을 찾아야 한다."
+                               + (f" ({ticket['item']}은(는) 그대로 가지고 있다.)" if ticket else "")}
         if method in ("flight", "ship") and self.wanted >= WANTED_AIRPORT_LIMIT \
                 and random.random() < self.wanted / 100:
             return self._arrest("공항 출국 심사" if method == "flight" else "항구 검문")
         hitch_chance = self.hazard["hitch"] if self.place_type == "야생" else 0.6
+        if self.flags.get("on_road"):
+            hitch_chance = min(0.85, hitch_chance + 0.3)      # 차가 다니는 도로 위
+        if self.is_night:
+            hitch_chance *= 0.5
         if method == "hitchhike" and random.random() > hitch_chance:
             self.pass_time(1.5, "other")
             return {"success": False, "message": "1시간 반을 기다렸지만 태워주는 차가 없었다."}
@@ -596,6 +681,11 @@ class GameState:
             self.wanted = clamp(self.wanted - 15)     # 멀리 떠나면 쫓는 사람이 줄어든다
         self.scene_setting, self.scene_place, self.scene_desc = "outdoor", "", ""   # 새 장소의 야외에서 시작
         self.scene_features, self.scene_seen = [], []
+        if km >= 20:          # 멀리 떠나면 그곳의 단서와 '여기서만' 유효한 사실은 더 이상 의미가 없다
+            self.leads = []
+            self.facts = [f for f in self.facts if f["scope"] == "always"]
+            for flag in ("on_road", "can_call", "at_airport"):
+                self.flags.pop(flag, None)
         self.scene_dirty = True
         if self.distance <= ARRIVAL_RADIUS_KM:
             self.distance = 0.0
@@ -606,6 +696,119 @@ class GameState:
             return True
         self._arrive_at_new_place(method)
         return False
+
+    def offer_needs(self):
+        """조건이 붙은 기회 중 지금 허용되는 것."""
+        needs = []
+        # 공관과 연락이 닿을 수 있다: 사람 사는 곳에 있거나, 전화가 되는 곳에 있다
+        if not self.flags.get("embassy_visited") and (self.place_type in ("마을", "도시") or self.flags.get("can_call")):
+            needs.append("contact")
+        # 공항: 바로 한국으로 갈 수 있는 곳이라 초반에는 나오지 않는다.
+        # 공관을 다녀왔거나(서류·지원금 확보) 충분히 오래 버틴 뒤, 도시에 있을 때만 나온다.
+        if self.place_type == "도시" and not self.flags.get("at_airport") and \
+                (self.flags.get("embassy_visited") or self.day >= 5):
+            needs.append("airport")
+        return tuple(needs)
+
+    def plan_offer(self, offer):
+        """기회의 목적지를 실제 지도 위에서 정한다. 갈 수 있는 곳이 없으면 None."""
+        move = offer.get("move") or {}
+        to = move.get("to")
+        if not to:
+            offer["text"] = offer["text"].replace("{dest}", "")
+            return self._finish_offer(offer)
+        city = None
+        if to in ("city_or_village", "rescue"):
+            limit = 250 if to == "rescue" else move["max_km"]
+            city = places.nearest_city(self.lat, self.lon, max_km=limit)
+            if city and city["km"] < 15:
+                city = None                    # 이미 그 도시에 있다
+        elif to == "embassy":
+            city = places.nearest_city(self.lat, self.lon, country=self.country_code, mission=True)
+            if not city or city["km"] > move["max_km"]:
+                return None
+        elif to == "airport":
+            city = places.nearest_city(self.lat, self.lon, max_km=move["max_km"], airport=True)
+            if not city:
+                return None
+        if city:
+            dest = {"type": to, "name": city["name"], "lat": city["lat"], "lon": city["lon"],
+                    "km": round(city["km"]), "place": "도시"}
+            if to == "embassy":
+                dest["label"] = f"{city['name']}의 {places.mission_label(city)}"
+            elif to == "airport":
+                dest["label"] = city["name"]
+            else:
+                dest["label"] = city["name"]
+        elif to == "port_toward_korea":
+            km = min(random.randint(1200, move["max_km"]), max(1, self.distance - 1))
+            lat, lon = geo.move_toward_korea(self.lat, self.lon, km)
+            port = places.nearest_city(lat, lon, max_km=400)
+            if port:
+                lat, lon = port["lat"], port["lon"]
+            dest = {"type": to, "name": port["name"] if port else "항구 도시", "lat": lat, "lon": lon,
+                    "km": round(geo.haversine_km(self.lat, self.lon, lat, lon)), "place": "도시",
+                    "label": f"{port['name']} 항구" if port else "한국 쪽 항구 도시"}
+        else:
+            # 가까운 도시가 없으면 근처 마을. 마을은 대체로 한국 쪽이지만 꼭 그 방향은 아니다.
+            km = random.randint(30, 120) if to == "rescue" else random.randint(60, 250)
+            base = geo.bearing_deg(self.lat, self.lon, *geo.SEOUL)
+            for _ in range(4):
+                lat, lon = geo.destination(self.lat, self.lon, base + random.uniform(-100, 100), km)
+                if geo.is_land(lat, lon) is not False:
+                    break
+            dest = {"type": to, "name": "근처 마을", "lat": lat, "lon": lon, "km": km, "place": "마을",
+                    "label": f"{leads_api.compass(geo.bearing_deg(self.lat, self.lon, lat, lon))}으로 약 {km}km 떨어진 마을"}
+        offer["dest"] = dest
+        offer["text"] = offer["text"].replace("{dest}", dest["label"])
+        return self._finish_offer(offer)
+
+    def seek_help(self, kind):
+        """플레이어가 직접 공관에 연락하거나 공항에 가려 할 때. 조건이 되면 그 기회를 지금 만든다."""
+        from .events import MAJOR_EVENTS
+        need = {"embassy": "contact", "airport": "airport"}.get(kind)
+        if need is None:
+            return {"success": False, "message": "kind 는 embassy 또는 airport 이다."}
+        if need not in self.offer_needs():
+            if kind == "embassy":
+                why = ("이미 공관의 도움을 받았다." if self.flags.get("embassy_visited")
+                       else "여기서는 연락할 방법이 없다. 마을·도시로 가거나 휴대폰 신호가 잡히는 곳을 찾아야 한다.")
+            else:
+                why = ("공항은 도시에서만 갈 수 있다." if self.place_type != "도시" else
+                       "아직 공항으로 갈 방법을 찾지 못했다. 공관에서 서류와 지원을 받거나, 며칠 더 버티며 여비를 모아야 한다.")
+            return {"success": False, "message": why}
+        template = next(e for e in MAJOR_EVENTS if e["id"] == kind)
+        offer = {"id": kind, "text": template["text"], "accept": template["accept"],
+                 "hours": template.get("hours", 0), "stats": dict(template.get("stats", {})),
+                 "items": list(template.get("items", [])),
+                 "money": int(random.randint(*template["money"]) // 10 * 10) if "money" in template else 0,
+                 "risk": template["risk"], "bad": dict(template["bad"]), "move": dict(template["move"])}
+        offer = self.plan_offer(offer)
+        if offer is None:
+            return {"success": False,
+                    "message": "가까운 곳에 갈 수 있는 " + ("한국 공관이" if kind == "embassy" else "국제공항이") + " 없다."}
+        offer["turn"] = self.turn
+        self.offer = offer
+        self.last_major_turn = self.turn
+        self.event = None
+        return {"success": True, "message": f"{offer['text']} (잘 풀리면: {offer['detail']})",
+                "안내": f"이번 턴에 이 제안을 서술하고, 플레이어가 다음 턴에 '{offer['accept']}'를 택하면 accept_offer 를 호출하라."}
+
+    def _finish_offer(self, offer):
+        details = []
+        dest = offer.get("dest")
+        if dest:
+            change = round(geo.distance_to_korea(dest["lat"], dest["lon"]) - self.distance)
+            way = f"한국까지 {abs(change):,}km {'가까워짐' if change < 0 else '멀어짐'}" if abs(change) >= 10 else "한국과의 거리는 거의 그대로"
+            details.append(f"{dest['label']}(약 {dest['km']:,}km)까지 이동, {way}")
+        if offer.get("money"):
+            details.append(f"${offer['money']} 획득")
+        if offer.get("stats"):
+            details.append("몸 상태 회복" if sum(offer["stats"].values()) > 0 else "기력 소모")
+        if offer.get("items"):
+            details.append("물품: " + ", ".join(offer["items"]))
+        offer["detail"] = " · ".join(details)
+        return offer
 
     def accept_offer(self):
         """대형 이벤트(기회)를 받아들인다. 좋은 결과일지 나쁜 결과일지는 엔진이 굴려서 정한다."""
@@ -652,19 +855,43 @@ class GameState:
                 results.append("얻은 물건: " + ", ".join(offer["items"]))
 
         arrived = False
-        km = float(offer.get("ride_km", 0)) * (bad.get("ride_frac", 0) if is_bad else 1)
-        if km > 0 and self.status == "playing":
-            km = min(km, self.distance)
-            self.pass_time(km / offer["speed"], "ride", sheltered=True)
-            new_lat, new_lon = geo.move_toward_korea(self.lat, self.lon, km)
+        dest = offer.get("dest")
+        if dest and self.status == "playing":
+            route = geo.haversine_km(self.lat, self.lon, dest["lat"], dest["lon"])
+            frac = bad.get("ride_frac", 1.0) if is_bad else 1.0
+            km = route * frac
+            self.pass_time(min(km / offer["move"]["speed"], 12) or 0.25, "ride", sheltered=True)
+            if km >= route - 0.5:
+                new_lat, new_lon = dest["lat"], dest["lon"]
+            else:
+                new_lat, new_lon = geo.move_toward(self.lat, self.lon, dest["lat"], dest["lon"], km)
             arrived = self._relocate(new_lat, new_lon, km, "offer")
             if not arrived:
-                self.place_type = plan.get("dest", offer.get("dest", self.place_type))
+                reached = km >= route - 0.5
+                self.place_type = dest["place"] if reached else bad.get("dest", "야생")
+                if reached and dest["type"] in ("city_or_village", "rescue", "airport", "embassy", "port_toward_korea") \
+                        and dest["name"] != "근처 마을":
+                    self.place_name = f"{self.place_name.split(',')[0]}, {dest['name']}" if self.place_name else dest["name"]
+                if reached and dest["type"] == "embassy":
+                    self.flags["embassy_visited"] = True
+                    self.set_scene("indoor", "한국 공관 영사과", "Inside a small consular office: a service counter, "
+                                   "a Korean flag, waiting chairs and document forms.", ["민원 창구", "태극기", "대기 의자"])
+                    self.remember(f"{dest['label']}에 도착해 영사 지원을 받음. 여행증명서를 발급받을 수 있다.", "always")
+                    self.last_major_turn = self.turn - 5          # 다음 기회(공항 등)가 머지않아 온다
+                elif reached and dest["type"] == "airport":
+                    self.flags["at_airport"] = True
+                    self.set_scene("indoor", "국제공항 출국장", "Inside an international airport departure hall: "
+                                   "check-in counters, departure boards, large windows to the runway.",
+                                   ["항공사 카운터", "출발 안내판", "활주로가 보이는 창"])
+                    self.remember(f"{dest['name']} 국제공항에 있다. 항공권만 있으면 한국행 비행기를 탈 수 있다.")
+                elif reached:
+                    self.remember(f"{offer['accept']} — {dest['label']}에 도착함")
                 results.append(f"{km:.0f}km를 이동해 {self.place_name}({self.place_type})에 내렸다. "
                                f"한국까지 {self.distance:.0f}km 남았다")
         self.turn_flags["travel"] = self.turn_flags.get("travel", 0) + 1
         self.time_passed_this_turn = True
         story = bad["text"] if is_bad else "제안은 진짜였고, 약속대로 이루어졌다."
+        self.remember(f"기회 '{offer['accept']}'를 받아들임 → {'나쁜' if is_bad else '좋은'} 결과", "always")
         self.turn_flags["offer_result"] = {"bad": is_bad, "title": offer["accept"],
                                            "text": story + " " + " / ".join(results)}
         return {"success": True, "outcome": "나쁜 결과" if is_bad else "좋은 결과",
@@ -677,6 +904,7 @@ class GameState:
         self.set_weather(get_weather(self.lat, self.lon))
         place = geo.reverse_geocode(self.lat, self.lon)
         self.place_name = place["name"] if place else "이름 모를 땅"
+        self.country_code = (place or {}).get("country_code", "") or self.country_code
         self.refresh_climate()
         self.biome = classify_biome(self.lat, self.weather, self.climate)
         roll = random.random()
@@ -719,6 +947,13 @@ class GameState:
         # 극한 지형의 야생에서는 이벤트 판정을 한 단계 더 위험하게 한다
         level = min(2, self.risk["level"] + 1) if self.in_extreme_wild else self.risk["level"]
         self.event = roll_event(self.biome, self.place_type, level, context=self.event_context())
+        if self.event:
+            lead = self.add_lead(self.event["lead"], self.event["text"]) if self.event.get("lead") else None
+            if lead:
+                self.event["lead_id"] = lead["id"]
+                self.event["direction"] = lead["direction"]
+            where = f" ({self.event['direction']} 방향)" if self.event.get("direction") else ""
+            self.remember(f"{self.day}일차 {self.hour}시: {self.event['text']}{where}")
         if self.place_type in ("마을", "도시") and self.wanted >= 20 and random.random() < self.wanted / 150:
             self.event = {"kind": "danger",
                           "text": "경찰이 수배 전단 속 얼굴과 당신을 번갈아 보더니 다가온다."
@@ -727,7 +962,10 @@ class GameState:
         waited = self.turn - self.last_major_turn
         if self.offer is None and self.turn >= 3 and (
                 random.random() < MAJOR_EVENT_CHANCE or waited >= MAJOR_EVENT_PITY_TURNS):
-            self.offer = roll_major_event(self.place_type, self.in_extreme_wild, self.indoor)
+            self.offer = roll_major_event(self.place_type, self.in_extreme_wild, self.indoor,
+                                          allowed_needs=self.offer_needs())
+            if self.offer:
+                self.offer = self.plan_offer(self.offer)
             if self.offer:               # 지금 장면에 맞는 기회가 없으면 다음 턴에 다시 시도한다
                 self.offer["turn"] = self.turn
                 self.last_major_turn = self.turn
@@ -790,6 +1028,7 @@ def create_game():
         utc_offset=float(weather.get("utc_offset", 0)),
         start_distance=distance, distance=distance,
     )
+    state.country_code = (place or {}).get("country_code", "")
     state.set_weather(weather)
     state.refresh_climate()
     state.biome = classify_biome(lat, state.weather, state.climate)

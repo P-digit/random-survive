@@ -17,6 +17,24 @@ INSTRUCTIONS = """
   집의 모양, 지금 계절(우기/건기 포함)에 따른 풍경을 기후에 맞춘다. 사막 기후에 울창한 숲이나 개울이
   나오거나, 열대우림에 눈이 쌓이는 식의 서술은 금지한다. '날씨'는 지금 이 순간의 하늘이다.
 
+[이야기의 개연성 - 매우 중요]
+- 이 세계는 한번 정해진 것이 바뀌지 않는다. 매 턴 주어지는 [확정된 사실]과 [단서]는 이미 일어난 일이며,
+  서술은 언제나 그것과 이어져야 한다. 앞서 나온 인물·장소·약속·물건을 잊거나 다르게 말하지 않는다.
+- [단서]는 '저쪽에 무언가 있다'는 신호다(엔진 소리, 연기, 불빛, 바퀴 자국 등). 각 단서의 정체와 방향·거리는
+  엔진이 이미 정해 두었다. 플레이어가 그쪽으로 가면 반드시 follow_lead 를 호출하고, 엔진이 알려 준 정체를
+  그대로 서술한다. 단서를 따라갔는데 아무것도 없었다는 식으로 끝내지 않는다.
+- 단서의 정체는 따라가기 전까지 서술에서 밝히지 않는다. 다만 방향과 대략의 느낌은 일관되게 말한다.
+- 서술 중에 새로운 소리·연기·불빛·흔적처럼 '무언가 있다'는 신호를 등장시켰다면 add_lead 로 등록한다.
+- 나중에 다시 나올 약속·인물·장소·상태는 remember 로 기록한다.
+- 결과는 그 장소와 시간에 맞아야 한다. 밤에 도착한 마을은 대부분 잠들어 있고, 사막의 연기는 유목민 천막,
+  숲의 엔진 소리는 임도나 벌목장일 가능성이 크다. 엔진이 돌려준 사실은 이런 점을 이미 반영한 것이다.
+
+[귀환으로 이어지는 길]
+- 한국 공관(대사관·총영사관)은 여행증명서와 긴급 지원금을 준다. 플레이어가 공관에 연락하거나 가려 하면
+  seek_help(kind='embassy') 를 호출한다. 공항으로 가려 하면 seek_help(kind='airport') 를 호출한다.
+- 공항은 한국으로 바로 갈 수 있는 곳이라, 공관의 도움을 받았거나 충분히 시간이 지난 뒤 도시에 있을 때만
+  갈 수 있다. 엔진이 거절하면 그 이유를 자연스럽게 서술한다.
+
 [그림과 서술의 일치 - 매우 중요]
 - 플레이어는 장면 이미지를 보면서 플레이한다. 이미지는 set_scene 에 적은 내용으로 그려진다.
 - [화면에 보이는 것]에 적힌 대상은 플레이어의 눈에 실제로 보이는 것이므로 반드시 존재한다. 플레이어가
@@ -176,6 +194,12 @@ def build_input(state, player_text, recap=None):
     if visible:
         parts += ["[화면에 보이는 것 - 플레이어가 보고 있는 장면 이미지에 그려진 대상. 모두 실제로 존재한다]",
                   ", ".join(visible)]
+    if state.facts:
+        parts += ["[확정된 사실 - 이미 일어난 일. 서술은 반드시 이것과 이어져야 한다]",
+                  "\n".join(f"- {f['text']}" for f in state.facts)]
+    if state.leads:
+        parts += ["[단서 - 아직 확인하지 않은 '저쪽의 무언가'. 플레이어가 그쪽으로 가면 follow_lead(id)]",
+                  "\n".join(f"- {l['id']}: {l['clue']} → {l['direction']}, 약 {l['km']}km" for l in state.leads)]
     if state.offer and state.offer.get("turn") == state.turn:
         parts += ["[기회 - 이번 턴에 새로 찾아온 대형 이벤트]",
                   f"{state.offer['text']} (잘 풀리면: {state.offer['detail']} / "
@@ -188,7 +212,8 @@ def build_input(state, player_text, recap=None):
                   "아니면 기회는 사라졌다고 짧게 언급한다."]
     if state.event:
         kind = {"danger": "위험", "lucky": "행운", "neutral": "중립"}[state.event["kind"]]
-        parts += [f"[돌발 이벤트 - {kind}]", state.event["text"]]
+        where = f" ({state.event['direction']} 방향, 단서 {state.event['lead_id']})" if state.event.get("lead_id") else ""
+        parts += [f"[돌발 이벤트 - {kind}]", state.event["text"] + where]
     if player_text is None:
         parts += ["[게임 시작]",
                   "플레이어가 방금 이곳에서 정신을 차렸다. 어떻게 이곳에 왔는지는 기억나지 않는다. "
@@ -302,6 +327,17 @@ def collect_notices(state):
         notices.append({"kind": "bad", "title": f"🚔 체포 — {arrested['where']}",
                         "text": f"하루 구금, 벌금 ${arrested['fine']:.0f}"
                                 + (f", 압수: {', '.join(arrested['lost'])}" if arrested["lost"] else "")})
+    found = flags.get("lead_result")
+    if found:
+        notices.append({"kind": "bad" if found["danger"] else "good",
+                        "title": f"🔎 {found['label']}의 정체 — {found['scene']}",
+                        "text": f"{found['hours']:.1f}시간 걸려 도착. {found['text']}"})
+    new_lead = flags.get("new_lead")
+    lead = state.find_lead(new_lead) if new_lead else None
+    if lead and not found:
+        clue = state.event["text"] + "\n" if state.event and state.event.get("lead_id") == lead["id"] else ""
+        notices.append({"kind": "info", "title": f"🧭 단서 — {lead['label']} ({lead['direction']}, 약 {lead['km']}km)",
+                        "text": clue + "그쪽으로 가 보면 정체를 알 수 있습니다. 예: “" + lead["label"] + " 쪽으로 간다”"})
     bought = flags.get("ticket")
     if bought and state.find_ticket_by_item(bought["item"]):
         notices.append({"kind": "info", "title": f"🎫 예약 완료 — {bought['item']}",
@@ -314,7 +350,7 @@ def collect_notices(state):
         notices.append({"kind": "info", "title": f"📍 이동 — {moved['how']} {moved['km']:,}km{cost}",
                         "text": f"{state.place_name} ({state.place_type} · {state.biome_name}) 도착. "
                                 f"한국까지 {state.distance:,.0f}km"})
-    if state.event and state.status == "playing":
+    if state.event and state.status == "playing" and not (lead and state.event.get("lead_id") == lead["id"]):
         if state.event["kind"] == "danger":
             notices.append({"kind": "danger", "title": "⚠️ 위험", "text": state.event["text"]})
         elif state.event["kind"] == "lucky":

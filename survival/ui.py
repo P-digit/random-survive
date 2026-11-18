@@ -307,6 +307,13 @@ def render_hud(state):
         parts.append(f'<div class="card{extreme}"><h4>{title}</h4>'
                      f'<div class="hazard">{escape(state.hazard["desc"])}</div></div>')
 
+    # 단서 (아직 확인하지 않은 '저쪽의 무언가')
+    if state.leads and state.status == "playing":
+        rows = "".join(f'<div class="hazard">🧭 <b>{escape(l["label"])}</b> · {escape(l["direction"])} 약 {l["km"]}km</div>'
+                       for l in state.leads)
+        parts.append(f'<div class="card"><h4>CLUES · 단서</h4>{rows}'
+                     '<div class="weather"><span class="sub">그쪽으로 가면 정체를 확인할 수 있습니다</span></div></div>')
+
     # 탈것 + 수배도
     if state.vehicle or state.wanted >= 1:
         rows = ""

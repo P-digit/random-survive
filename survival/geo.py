@@ -28,12 +28,36 @@ def distance_to_korea(lat, lon):
 
 def move_toward_korea(lat, lon, km):
     """현재 위치에서 서울 방향 대권 경로를 따라 km만큼 이동한 좌표를 반환한다."""
-    total = distance_to_korea(lat, lon)
+    return move_toward(lat, lon, SEOUL[0], SEOUL[1], km)
+
+
+def bearing_deg(lat1, lon1, lat2, lon2):
+    """1에서 2를 바라보는 방위각(도, 북쪽 0, 시계 방향)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def destination(lat, lon, bearing, km):
+    """한 지점에서 방위각 bearing 쪽으로 km 떨어진 좌표."""
+    d = km / 6371.0
+    b = math.radians(bearing)
+    p1, l1 = math.radians(lat), math.radians(lon)
+    p2 = math.asin(math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(b))
+    l2 = l1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(p1), math.cos(d) - math.sin(p1) * math.sin(p2))
+    return round(math.degrees(p2), 4), round((math.degrees(l2) + 540) % 360 - 180, 4)
+
+
+def move_toward(lat, lon, target_lat, target_lon, km):
+    """현재 위치에서 목표 지점 방향 대권 경로를 따라 km만큼 이동한 좌표. 목표를 넘으면 목표 지점."""
+    total = haversine_km(lat, lon, target_lat, target_lon)
     if total <= 1e-6 or km >= total:
-        return SEOUL
+        return target_lat, target_lon
     f = km / total
     p1, l1 = math.radians(lat), math.radians(lon)
-    p2, l2 = math.radians(SEOUL[0]), math.radians(SEOUL[1])
+    p2, l2 = math.radians(target_lat), math.radians(target_lon)
     d = total / 6371.0  # 각거리
     a = math.sin((1 - f) * d) / math.sin(d)
     b = math.sin(f * d) / math.sin(d)
@@ -90,7 +114,8 @@ def reverse_geocode(lat, lon):
     region = (address.get("state") or address.get("region") or address.get("province")
               or address.get("county") or "")
     name = ", ".join(x for x in [country, region] if x) or data.get("display_name", "")
-    return {"country": country, "region": region, "name": name}
+    return {"country": country, "region": region, "name": name,
+            "country_code": str(address.get("country_code", "")).lower()}
 
 
 def pick_random_land():

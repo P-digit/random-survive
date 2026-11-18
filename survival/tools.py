@@ -115,6 +115,45 @@ TOOLS = [
         },
     ),
     _function(
+        "add_lead",
+        "서술 속에서 '저쪽에 무언가 있다'는 새 단서를 만들었을 때 호출한다(멀리 들리는 소리, 연기, 불빛, 바퀴 자국, "
+        "길 표시, 가축 떼, 강물 등). 엔진이 그 정체와 방향·거리를 정해 [단서] 목록에 올린다. 이미 목록에 있는 단서는 "
+        "다시 만들지 않는다. 정체는 플레이어가 따라가서 확인하기 전까지 서술에서 밝히지 않는다.",
+        {
+            "kind": {"type": "string", "enum": ["engine", "smoke", "light", "settlement", "tracks", "power", "river",
+                                                 "trail", "herd", "chainsaw", "caravan", "signal", "water"],
+                     "description": "engine 엔진 소리, smoke 연기, light 밤의 불빛, settlement 멀리 보이는 마을, "
+                                    "tracks 바퀴·발자국, power 송전탑·전선, river 강·하천, trail 사람이 낸 길·표시·지도, "
+                                    "herd 가축 떼·방울 소리, chainsaw 벌목 소리, caravan 대상 행렬, "
+                                    "signal 휴대폰 신호, water 물이 있다는 표시"},
+            "clue": {"type": "string", "description": "플레이어가 보고 들은 것 그대로 짧게. 예: '북쪽 언덕 너머 개 짖는 소리'"},
+        },
+    ),
+    _function(
+        "follow_lead",
+        "플레이어가 [단서] 목록에 있는 단서 쪽으로 가려 할 때 호출한다(소리 나는 쪽으로 간다, 연기를 향해 걷는다 등). "
+        "미리 정해 둔 정체가 그 방향·거리에 반드시 있고, 엔진이 걸린 시간·장소·장면을 처리한다. "
+        "이때는 advance_time, travel, set_scene 을 따로 호출하지 않는다.",
+        {"lead_id": {"type": "string", "description": "[단서] 목록의 id. 예: 'L3'"}},
+    ),
+    _function(
+        "remember",
+        "이후 이야기가 어긋나지 않도록 확정된 사실을 기록한다. 약속(\"내일 아침 6시에 트럭이 떠난다\"), "
+        "인물(\"여관 주인 아흐메드는 영어를 조금 한다\"), 장소(\"마을 동쪽 끝에 버스 정류장이 있다\"), "
+        "상태(\"오두막 문은 부서져 있다\")처럼 나중에 다시 나올 수 있는 것만 적는다.",
+        {
+            "fact": {"type": "string", "description": "한 문장으로 된 사실"},
+            "scope": {"type": "string", "enum": ["here", "always"],
+                      "description": "here: 이 장소에서만 의미 있음(멀리 이동하면 잊음), always: 게임 내내 유효"},
+        },
+    ),
+    _function(
+        "seek_help",
+        "플레이어가 직접 한국 공관(대사관·영사관)에 연락하거나 공항으로 가려 할 때 호출한다. 조건이 되면 엔진이 "
+        "실제 위치의 가장 가까운 공관·공항으로 가는 기회를 만든다. 조건이 안 되면 이유를 돌려준다(그대로 서술한다).",
+        {"kind": {"type": "string", "enum": ["embassy", "airport"], "description": "embassy 공관, airport 공항"}},
+    ),
+    _function(
         "pay",
         "플레이어가 돈을 쓸 때 반드시 호출한다: 물건·음식·물 사기, 숙박비, 뇌물, 택시·나룻배 삯, 수수료, 벌금 등. "
         "(교통편 표는 buy_ticket, 정해진 노선 이동 요금은 travel 이 알아서 받는다.) 돈이 모자라면 실패하며, "
@@ -210,7 +249,7 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
-        elif name in ("advance_time", "travel") and state.turn_flags.get("travel", 0) >= 1:
+        elif name in ("advance_time", "travel", "follow_lead") and state.turn_flags.get("travel", 0) >= 1:
             result = {"error": "이번 턴에는 이미 이동했다. 한 턴에는 플레이어가 지시한 행동 하나만 처리한다. "
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
@@ -220,6 +259,17 @@ def execute_tool(state, name, arguments, client=None):
                                    str(args.get("crime", "none")), str(args.get("witnessed", "none")),
                                    bool(args.get("violent")), str(args.get("item", "")),
                                    bool(args.get("stealth")))
+        elif name == "add_lead":
+            lead = state.add_lead(args.get("kind"), str(args.get("clue", "")))
+            result = ({"ok": True, "단서": f"{lead['id']} {lead['label']} — {lead['direction']}, 약 {lead['km']}km "
+                                            "(정체는 따라가기 전까지 밝히지 않는다)"} if lead else {"error": "알 수 없는 단서 종류"})
+        elif name == "follow_lead":
+            result = state.follow_lead(args.get("lead_id", ""))
+        elif name == "remember":
+            state.remember(str(args.get("fact", "")), str(args.get("scope", "here")))
+            result = {"ok": True}
+        elif name == "seek_help":
+            result = state.seek_help(str(args.get("kind", "")))
         elif name == "pay":
             result = state.pay(args.get("amount", 0), str(args.get("purpose", "")))
         elif name == "acquire_vehicle":
