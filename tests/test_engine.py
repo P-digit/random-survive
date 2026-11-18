@@ -1883,3 +1883,86 @@ def test_arrest_confiscates_stolen_goods(game):
     game.begin_turn()
     game.arrest("검문")
     assert "훔친 시계" not in game.items and game.stolen_items == []
+
+
+# ---------- 19차 수정: 지나간 기회는 정말 사라진다 ----------
+def offer_turn(game, offer_id="trucker"):
+    from survival.events import MAJOR_EVENTS
+    e = next(x for x in MAJOR_EVENTS if x["id"] == offer_id)
+    game.offer = game.plan_offer({"id": offer_id, "text": e["text"], "accept": e["accept"], "hours": e.get("hours", 0),
+                                  "stats": dict(e.get("stats", {})), "items": list(e.get("items", [])), "money": 0,
+                                  "risk": e["risk"], "bad": dict(e["bad"]), "move": dict(e.get("move", {}))})
+    game.offer["turn"] = game.turn
+    return game.offer
+
+
+def test_mentioning_the_truck_is_not_accepting(game):
+    game.begin_turn()
+    offer_turn(game)
+    for text in ["트럭 기사에게 말을 건다", "트럭을 살펴본다", "트럭 타이어를 살핀다", "트럭 기사에게 어디 가는지 묻는다"]:
+        game.turn_flags["player_text"] = text
+        assert not tools_module.player_asked_for(game, "accept_offer", {}), text
+    for text in ["트럭에 탄다", "트럭에 올라탄다", "트럭 기사를 따라간다", "제안을 받아들인다", "트럭을 타고 가겠다"]:
+        game.turn_flags["player_text"] = text
+        assert tools_module.player_asked_for(game, "accept_offer", {}), text
+
+
+def test_ignored_offer_leaves_the_world(game, monkeypatch):
+    monkeypatch.setattr(state_module, "roll_event", lambda *a, **k: None)
+    game.begin_turn()                                                    # N턴: 트럭 기사가 제안
+    offer_turn(game)
+    game.set_scene("outdoor", "흙길 옆", "A dirt road. A truck is parked by the road. Grass all around.",
+                   ["흙길", "멈춰 선 트럭"])
+    game.add_character("아메드", "트럭 기사", "50대")
+    game.end_turn(0.5)
+    assert game.offer                                                    # 나온 턴에는 유지
+
+    game.begin_turn()                                                    # N+1턴: 다른 행동
+    text = gamemaster.build_input(game, "물을 마신다")
+    assert "[기회 - 이번 턴이 마지막]" in text and "트럭 기사는 더 기다리지 않고" in text
+    game.scene_dirty = False
+    game.end_turn(0.5)
+    assert game.offer is None
+    assert "멈춰 선 트럭" not in game.scene_features and not game.find_character("트럭 기사")
+    assert "truck" not in game.scene_desc.lower() and "dirt road" in game.scene_desc.lower()
+    assert game.scene_dirty                                              # 그림에서도 트럭을 지운다
+    assert any("⌛" in n["title"] for n in gamemaster.collect_notices(game))
+    assert any("트럭 기사는" in f["text"] for f in game.facts)
+
+    game.begin_turn()                                                    # N+2턴: 이제 와서 탄다고 해도
+    game.turn_flags["player_text"] = "트럭에 탄다"
+    out = call(game, "accept_offer")
+    assert out["success"] is False and "이미 지나갔다" in out["message"] and game.place_type == "야생"
+    assert "[지나간 기회" in gamemaster.build_input(game, "트럭에 탄다")
+
+
+def test_same_offer_does_not_come_right_back(game, monkeypatch):
+    monkeypatch.setattr(state_module, "roll_event", lambda *a, **k: None)
+    game.begin_turn()
+    offer_turn(game)
+    game.end_turn(0.5)
+    game.begin_turn()
+    game.end_turn(0.5)                                                   # 놓침
+    monkeypatch.setattr(state_module, "roll_major_event",
+                        lambda *a, **k: {"id": "trucker", "text": "트럭이 또 멈춘다", "accept": "트럭에 올라탄다",
+                                         "move": {}, "stats": {}, "items": [], "money": 0, "hours": 0, "risk": "",
+                                         "bad": {"chance": 0}})
+    fix_roll(monkeypatch, 0.0)
+    for _ in range(3):
+        game.begin_turn()
+        assert game.offer is None or game.offer["id"] != "trucker"
+        game.end_turn(0.25)
+        game.health = game.satiety = game.hydration = 100
+
+
+def test_supply_crate_stays_until_you_leave(game, monkeypatch):
+    monkeypatch.setattr(state_module, "roll_event", lambda *a, **k: None)
+    game.begin_turn()
+    offer_turn(game, "supply")
+    for _ in range(3):
+        game.end_turn(0.5)
+        game.begin_turn()
+    assert game.offer and game.offer["id"] == "supply"                  # 상자는 떠나지 않는다
+    game.turn_flags["player_text"] = "남쪽으로 30km 걷는다"
+    call(game, "travel", method="walk", distance_km=30)
+    assert game.offer is None                                            # 떠나면 두고 온 것

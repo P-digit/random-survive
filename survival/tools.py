@@ -328,6 +328,12 @@ TRAVEL_WORDS = {
     "flight": ("비행기", "항공", "탑승", "공항"),
     "drive": ("운전", "몰고", "몬다", "몰아", "타고 간다", "타고 달", "차로", "트럭으로", "오토바이로", "보트로"),
 }
+# 기회의 낱말과 함께 쓰여야 수락이 되는 행동 (마지막 글자는 받침이 붙어도 같은 말: '탄다', '탈게', '오른다')
+from .intent import _pattern  # noqa: E402
+
+ACCEPT_ACTIONS = _pattern(("타려", "타겠", "타자", "타고", "탄다", "탈게", "탔다", "탔어", "올라", "오르", "오른", "따라가", "따라간",
+                           "가겠", "갈게", "가자", "간다", "연다", "열어", "열겠", "응하", "응한", "받는다", "받겠",
+                           "들어가", "들어간", "부탁", "맡기"))
 # 기회를 받아들인다는 분명한 표현. ('간다', '올라', '네'처럼 다른 말에도 흔히 들어가는 말은 넣지 않는다)
 ACCEPT_WORDS = ("받아들", "수락", "승낙", "응한다", "응하겠", "응할게", "제안을받", "제안대로", "그러겠", "그러자고",
                 "태워달", "태워주", "데려다달", "데려다주")
@@ -361,10 +367,15 @@ def player_asked_for(state, name, args):
         words = TRAVEL_WORDS.get(str(args.get("method", "")), ())
         return any(w.replace(" ", "") in text for w in words)
     if name == "accept_offer":
-        offer = state.offer or {}
-        # 그 기회를 가리키는 낱말(트럭, 헬기, 초대, 인터뷰, 공관…)이나 분명한 수락 표현이 있어야 한다
+        if not state.offer:
+            return True                  # 받아들일 제안이 없으면 accept_offer 가 '이미 지나갔다'고 알려 준다
+        offer = state.offer
+        # 분명한 수락 표현이 있거나, 그 기회의 낱말(트럭, 헬기, 초대…)과 '타다·오르다·따라가다' 같은 수락 행동이
+        # 함께 있어야 한다. '트럭 기사에게 말을 건다'처럼 언급만 한 것은 수락이 아니다.
+        if any(w in text for w in ACCEPT_WORDS):
+            return True
         own = clue_words({"label": str(offer.get("accept", "")), "clue": "", "direction": ""})
-        return any(w.replace(" ", "") in text for w in own if w) or any(w in text for w in ACCEPT_WORDS)
+        return any(w.replace(" ", "") in text for w in own if w) and bool(ACCEPT_ACTIONS.search(text))
     if name == "follow_lead":
         lead = state.find_lead(args.get("lead_id", ""))
         if lead is None:

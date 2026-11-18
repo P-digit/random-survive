@@ -498,6 +498,21 @@ MAJOR_EVENTS = [
 ]
 
 
+# 기회가 사라질 때: 무엇이 떠나는지, 장면에서 지울 것(한국어 '보이는 것'과 그림 묘사의 영어 낱말)
+OFFER_EXIT = {
+    "trucker": ("트럭 기사는 더 기다리지 않고 트럭을 몰고 떠났다.", ("트럭", "화물차", "기사"), ("truck", "lorry")),
+    "convoy": ("구호 차량 행렬은 다시 출발해 멀어졌다.", ("구호", "차량", "행렬"), ("convoy", "vehicle", "jeep", "truck")),
+    "rescue": ("구조 헬기는 다시 날아올라 멀어졌다.", ("헬기", "헬리콥터", "구조대"), ("helicopter",)),
+    "korean": ("초대했던 사람은 아쉬워하며 돌아갔다.", ("한국인",), ()),
+    "news": ("기자는 다른 취재를 하러 떠났다.", ("기자", "카메라"), ("reporter", "camera")),
+    "cargo": ("화물선은 당신을 기다리지 않고 출항했다.", ("화물선", "선장"), ("ship", "freighter", "vessel")),
+    "embassy": ("공관과의 연락이 끊겼다.", (), ()),
+    "airport": ("공항으로 가는 차편은 떠났다.", (), ()),
+}
+# 사람이 아니라 놓여 있는 물건이라 떠나지 않는 기회 (그곳을 떠날 때까지 남는다)
+PERSISTENT_OFFERS = ("supply",)
+
+
 def roll_major_event(place_type, extreme, indoor=False, rng=random, allowed_needs=()):
     """현재 장소·장면에서 일어날 수 있는 대형 이벤트를 하나 뽑아 '제안'으로 만든다. 없으면 None.
 
