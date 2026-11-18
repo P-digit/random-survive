@@ -997,6 +997,7 @@ def test_lead_target_is_fixed_and_fits_biome():
 
 def test_gm_added_lead_and_facts_persist_until_leaving(game):
     game.begin_turn()
+    game.leads, game.facts = [], []                                # 턴 시작 때 무작위로 생긴 단서·사실은 빼고
     out = call(game, "add_lead", kind="herd", clue="언덕 너머에서 양 떼 방울 소리")
     lead_id = out["단서"].split()[0]
     assert game.find_lead(lead_id) and call(game, "add_lead", kind="herd", clue="언덕 너머에서 양 떼 방울 소리")
@@ -1102,6 +1103,7 @@ def test_long_walk_takes_several_turns(game, monkeypatch):
 
 def test_village_uses_known_lead(game, monkeypatch):
     game.begin_turn()
+    game.leads = []                                                # 턴 시작 때 무작위로 생긴 단서는 빼고
     lead = game.add_lead("settlement", "계곡 아래 마을 지붕")
     assert lead["target"] == "village"
     game.turn_flags["travel"] = 0
@@ -1427,3 +1429,159 @@ def test_location_bar_separates_terrain_and_place(game):
     game.place_type = "마을"
     html = render_location(game)
     assert "지형: " in html and "장소: 마을" in html
+
+
+# ---------- 15차 수정: 요청하지 않은 장소 변화를 원천 차단 ----------
+LOCAL_ACTIONS = [
+    "다시 돌아가 덜 젖은 곳을 찾는다", "쉴 곳을 찾아 이동한다", "주변을 둘러본다", "나무 아래로 옮긴다",
+    "물을 찾아 돌아다닌다", "근처 바위 쪽으로 이동한다", "비를 피할 곳을 찾는다", "자리를 옮긴다",
+    "불을 피운다", "그늘로 이동한다", "언덕 위로 올라가 본다", "조금 걸어 본다", "근처를 탐색한다",
+    "사람의 흔적을 찾는다", "나뭇가지로 쉼터 집을 짓는다", "잠깐 앉아서 쉰다", "네, 좀 더 걸어 볼게",
+    "좋아, 주변을 살펴보자", "돌아가서 다시 찾아본다", "물가 쪽으로 가 본다", "출발 전에 물을 챙긴다",
+    "떠나기 전에 불을 끈다", "계속 주변을 살핀다", "이어서 장작을 모은다", "마저 먹는다",
+]
+MOVE_CALLS = [
+    ("travel", {"method": "walk", "distance_km": 4}), ("travel", {"method": "walk", "distance_km": 30}),
+    ("travel", {"method": "hitchhike", "distance_km": 100}), ("travel", {"method": "bus", "distance_km": 100}),
+    ("go_to", {"target": "village"}), ("go_to", {"target": "city"}), ("go_to", {"target": "continue"}),
+    ("accept_offer", {}),
+]
+
+
+def test_no_place_change_without_a_requested_move(game, monkeypatch):
+    """그 자리 근처에서 움직이는 어떤 입력에도, GM이 어떤 이동 툴을 부르든, 위치·장소는 바뀌지 않는다."""
+    fix_roll(monkeypatch, 0.0)                                          # 확률이 걸린 것은 모두 '성공' 쪽으로
+    for text in LOCAL_ACTIONS:
+        for tool_name, args in MOVE_CALLS + [("follow_lead", None)]:
+            game.lat, game.lon, game.place_type, game.money = 46.9, 103.8, "야생", 500
+            game.journey = {"type": "village", "name": "마을", "label": "마을", "lat": 47.0, "lon": 104.0, "place": "마을"}
+            game.begin_turn()
+            game.leads = []
+            lead = game.add_lead("smoke", "멀리서 연기가 가늘게 피어오른다.")
+            game.offer = {"id": "trucker", "text": "트럭", "accept": "트럭에 올라탄다", "turn": game.turn, "hours": 0,
+                          "stats": {}, "items": [], "money": 0, "risk": "", "bad": {"chance": 0},
+                          "move": {"to": "city_or_village", "max_km": 500, "speed": 60},
+                          "dest": {"type": "city_or_village", "name": "근처 마을", "label": "마을", "lat": 47.2,
+                                   "lon": 104.2, "km": 40, "place": "마을"}}
+            game.turn_flags["player_text"] = text
+            call_args = {"lead_id": lead["id"]} if tool_name == "follow_lead" else args
+            out = call(game, tool_name, **call_args)
+            assert (game.lat, game.lon, game.place_type) == (46.9, 103.8, "야생"), (text, tool_name, out)
+
+
+def test_the_reported_case_rain_and_tree(game, monkeypatch):
+    """보고된 상황: 비를 피해 나무 아래로 갔을 뿐인데 마을이 됨 → 이제는 장면만 '나무 아래'로 바뀐다."""
+    game.biome, game.place_type = "savanna", "야생"
+    calls = []
+
+    def fake_create(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            return SimpleNamespace(id="r1", output_text="", output=[
+                SimpleNamespace(type="function_call", name="travel", call_id="a",
+                                arguments='{"method": "walk", "distance_km": 4}')])
+        if len(calls) == 2:                                             # 거절당한 GM이 장면만 바꾼다
+            return SimpleNamespace(id="r2", output_text="", output=[
+                SimpleNamespace(type="function_call", name="advance_time", call_id="b",
+                                arguments='{"hours": 1, "activity": "explore", "sheltered": false}'),
+                SimpleNamespace(type="function_call", name="set_scene", call_id="c",
+                                arguments=json.dumps({"setting": "outdoor", "place": "큰 나무 아래",
+                                                      "description_en": "A large tree in the savanna, rain falling.",
+                                                      "visible_features": ["큰 나무"]}))])
+        return SimpleNamespace(id="r3", output=[], output_text="당신은 **큰 나무** 아래로 몸을 피한다.")
+
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=fake_create)))
+    start = (game.lat, game.lon)
+    gamemaster.run_turn(game, "다시 돌아가 덜 젖은 곳을 찾는다")
+    assert "error" in json.loads(calls[1]["input"][0]["output"])
+    assert (game.lat, game.lon) == start and game.place_type == "야생" and game.scene_place == "큰 나무 아래"
+
+
+def test_arrival_place_is_rule_based_not_random():
+    from survival.state import arrival_place
+    far, near = {"km": 500}, {"km": 10}
+    assert arrival_place("walk", far) == "야생" and arrival_place("drive", far) == "야생"
+    assert arrival_place("walk", near) == "도시"
+    assert arrival_place("hitchhike", far) == "마을" and arrival_place("bus", far) == "마을"
+    assert arrival_place("bus", {"km": 25}) == "도시" and arrival_place("train", far) == "도시"
+    assert arrival_place("walk", None) == "야생"
+
+
+def test_long_walk_never_lands_in_a_village(game, monkeypatch):
+    places_seen = set()
+    for i in range(60):
+        game.lat, game.lon, game.place_type = 46.9, 103.8, "야생"
+        game.begin_turn()
+        game.turn_flags["player_text"] = "남쪽으로 30km 걷는다"
+        call(game, "travel", method="walk", distance_km=30)
+        places_seen.add(game.place_type)
+    assert places_seen == {"야생"}                                        # 걸어서는 우연히 마을에 닿지 않는다
+
+
+def test_requested_moves_still_work(game, monkeypatch):
+    fix_roll(monkeypatch, 0.0)
+    game.begin_turn()
+    game.turn_flags["player_text"] = "지나가는 차를 세워 히치하이킹한다"
+    out = call(game, "travel", method="hitchhike", distance_km=100)
+    assert out["success"] and game.place_type == "마을"
+    game.begin_turn()
+    game.offer = {"id": "news", "text": "기자", "accept": "인터뷰에 응한다", "turn": game.turn, "hours": 1,
+                  "stats": {}, "items": [], "money": 100, "risk": "", "bad": {"chance": 0}, "move": {}}
+    game.turn_flags["player_text"] = "주변을 살핀다"
+    assert "error" in call(game, "accept_offer")                          # 받아들인다고 하지 않았다
+    game.turn_flags["player_text"] = "인터뷰에 응한다"
+    assert call(game, "accept_offer")["success"]
+
+
+def test_safety_net_reverts_unrequested_change(game):
+    game.begin_turn()
+    game.place_type, game.lat = "마을", 50.0                              # 어떤 경로로든 몰래 바뀌었다면
+    assert game.guard_unrequested_move() is True
+    assert game.place_type == "야생" and game.lat == 46.9
+    game.turn_flags["travel"] = 1                                       # 정상적으로 이동한 턴이면 그대로
+    game.place_type = "마을"
+    assert game.guard_unrequested_move() is False and game.place_type == "마을"
+
+
+def test_narration_checked_when_place_type_changes(game):
+    game.begin_turn()
+    game.place_type, game.scene_place = "마을", ""
+    out = gamemaster.ensure_scene(None, "당신은 초원을 걷는다.", game)
+    assert out.startswith("*📍 지금 위치:") and "마을" in out.splitlines()[0]
+    assert gamemaster.ensure_scene(None, "당신은 마을에 들어선다.", game) == "당신은 마을에 들어선다."
+
+
+def test_long_suggestions_are_not_cut():
+    long = "강을 따라 하류로 내려가며 사람이 사는 흔적을 찾는다"
+    _, suggestions = gamemaster.split_suggestions(f"서술\n▶ {long}\n▶ 불을 피운다\n▶ 잔다")
+    assert suggestions[0] == long
+
+
+REQUESTED_MOVES = [
+    ("go_to", {"target": "village"}, ["가장 가까운 마을로 간다", "마을을 찾아 떠난다", "사람 사는 곳으로 가자", "근처 농가로 간다"]),
+    ("go_to", {"target": "city"}, ["도시로 간다", "가까운 시내로 가자"]),
+    ("go_to", {"target": "embassy"}, ["한국 대사관에 간다", "영사관을 찾아간다"]),
+    ("go_to", {"target": "airport"}, ["공항으로 간다"]),
+    ("go_to", {"target": "continue"}, ["계속 간다", "가던 길을 간다", "이어서 간다", "다시 출발한다"]),
+    ("travel", {"method": "walk", "distance_km": 30}, ["한국 쪽으로 30km 걷는다", "남쪽으로 걷는다", "길을 따라 걷는다"]),
+    ("travel", {"method": "hitchhike", "distance_km": 100}, ["히치하이킹을 한다", "지나가는 차를 세운다", "트럭을 얻어 탄다"]),
+    ("travel", {"method": "bus", "distance_km": 100}, ["버스를 탄다"]),
+    ("travel", {"method": "drive", "distance_km": 100}, ["트럭을 몰고 간다", "차로 달린다"]),
+    ("accept_offer", {}, ["트럭에 탄다", "제안을 받아들인다", "태워 달라고 한다"]),
+]
+
+
+def test_requested_move_phrasings_are_allowed(game):
+    """막는 것만큼 중요: 플레이어가 실제로 이동을 말하면 그 이동은 허용된다."""
+    game.begin_turn()
+    game.offer = {"accept": "트럭에 올라탄다"}
+    for tool_name, args, texts in REQUESTED_MOVES:
+        for text in texts:
+            game.turn_flags["player_text"] = text
+            assert tools_module.player_asked_for(game, tool_name, args), (tool_name, text)
+    game.leads = []
+    lead = game.add_lead("smoke", "멀리서 연기가 가늘게 피어오른다.")
+    for text in ["연기 쪽으로 간다", "연기를 향해 걷는다", f"{lead['direction']}으로 걸어간다", "그쪽으로 가 보자"]:
+        game.turn_flags["player_text"] = text
+        assert tools_module.player_asked_for(game, "follow_lead", {"lead_id": lead["id"]}), text

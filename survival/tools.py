@@ -78,7 +78,9 @@ TOOLS = [
     ),
     _function(
         "travel",
-        "한국 방향으로 이동한다. 플레이어가 이번 턴에 이동을 지시했을 때만, 한 턴에 한 번만 호출한다. "
+        "이 지역을 떠나 한국 방향으로 장거리 이동한다(수 km~수천 km). 플레이어가 이번 턴에 그런 이동을 지시했을 "
+        "때만, 한 턴에 한 번만 호출한다. 주변에서 쉴 곳·물·먹을 것을 찾으며 자리를 옮기는 것은 travel 이 아니다"
+        "(advance_time + set_scene). 도착한 곳의 장소유형(야생/마을/도시)은 엔진이 정해 돌려준다. "
         "성공 여부, 요금, 도착지는 게임 엔진이 결정하므로 결과를 보고 서술한다. "
         "'예약한_교통편'에 해당 교통편의 표가 있으면 요금 없이 그 표로 탑승하고 표는 사라진다. "
         "수단별 조건: walk(어디서나, 최대 30km), hitchhike(어디서나, 최대 250km, 실패할 수 있음), "
@@ -234,6 +236,8 @@ TOOLS = [
                                                        "같은 곳이면 이전과 똑같은 이름을 쓴다."},
             "description_en": {"type": "string",
                                "description": "그 장소에서 눈에 보이는 풍경을 영어로만 2~3문장 묘사(그림 생성용, 한글 금지). "
+                                              "장소유형이 야생이면 마을·집·도로를 묘사하지 않는다(멀리 보이는 것이 단서라면 "
+                                              "'far in the distance'로만). "
                                               "표지판·간판이 있다면 그 나라 언어로 쓰여 있다고 적는다. "
                                               "그 지역의 기후·계절·식생에 맞게, visible_features 를 모두 포함해서 쓴다. "
                                               "사물·구조·빛 위주로, 사람은 묘사하지 않는다. "
@@ -272,13 +276,47 @@ TOOLS = [
 
 # 플레이어 입력에 이런 말이 있어야 그 목적지로 이동한다 (GM이 '쉴 곳 찾기'를 마을 이동으로 바꾸지 못하게)
 GO_WORDS = {
-    "village": ("마을", "사람", "인가", "동네", "촌", "집", "정착", "부락", "농가", "민가", "가까운 곳"),
-    "city": ("도시", "시내", "시가지", "큰 마을", "읍"),
+    "village": ("마을", "인가", "동네", "부락", "농가", "민가", "정착지", "사람 사는", "사람이 사는", "시골"),
+    "city": ("도시", "시내", "시가지", "읍내"),
     "embassy": ("대사관", "영사관", "공관", "영사"),
     "airport": ("공항", "비행기", "항공"),
-    "continue": ("계속", "이어", "가던", "마저", "다시 출발", "출발"),
+    "continue": ("계속 간다", "계속 가", "계속 걷", "이어서 간다", "이어 간다", "이어간다", "가던 길", "마저 간다",
+                 "다시 출발", "출발한다", "출발하자"),
 }
-DIRECTION_WORDS = ("쪽", "방향", "따라", "향해", "향한다", "향하", "가까이", "다가")
+# 단서가 하나뿐일 때 '그쪽으로 간다'처럼 가리키는 말
+POINTING_WORDS = ("그쪽", "저쪽", "그곳", "저곳", "거기", "저기", "소리나는", "소리가나는", "연기나는", "불빛이보이는")
+COMPASS = ("북쪽", "북동쪽", "동쪽", "남동쪽", "남쪽", "남서쪽", "서쪽", "북서쪽")
+STOPWORDS = ("멀리서", "멀리", "누군가", "가까이", "근처", "주변", "하나", "여러", "몇", "아주", "조금", "잠깐", "아직",
+             "일정한", "선명하게", "한", "그", "이", "저")
+
+
+def clue_words(lead):
+    """단서를 가리키는 낱말: 이름과 내용의 명사 쪽 낱말(두 글자 이상, 동사·흔한 말 제외)과 방위."""
+    words = []
+    for raw in (lead["label"] + " " + lead["clue"]).split():
+        w = raw.strip(".,!?\"'()“”")
+        for josa in ("에서", "으로", "에게", "이", "가", "을", "를", "은", "는", "의", "에", "로", "와", "과", "도"):
+            if w.endswith(josa) and len(w) - len(josa) >= 2:
+                w = w[: -len(josa)]
+                break
+        if len(w) >= 2 and not w.endswith("다") and w not in STOPWORDS:
+            words.append(w)
+    return words + [lead["direction"]]
+
+
+# 장거리 이동(travel): 이 지역을 떠나는 말. '이동', '돌아다닌다'처럼 그 자리 근처에서 움직이는 말은 넣지 않는다
+TRAVEL_WORDS = {
+    "walk": ("한국", "km", "킬로", "떠난다", "떠나자", "떠나겠", "출발한다", "출발하자", "출발하겠", "길을 따라", "도로를 따라", "강을 따라",
+             "하루 종일 걷", "종일 걷", "북쪽으로", "북동쪽으로", "동쪽으로", "남동쪽으로", "남쪽으로", "남서쪽으로",
+             "서쪽으로", "북서쪽으로"),
+    "hitchhike": ("히치", "태워", "얻어 타", "얻어 탄", "얻어 탈", "얻어 탔", "차를 세", "엄지"),
+    "bus": ("버스",), "train": ("기차", "열차"), "ship": ("배를", "배로", "배에", "여객선", "선박", "항구"),
+    "flight": ("비행기", "항공", "탑승", "공항"),
+    "drive": ("운전", "몰고", "몬다", "몰아", "타고 간다", "타고 달", "차로", "트럭으로", "오토바이로", "보트로"),
+}
+# 기회를 받아들인다는 분명한 표현. ('간다', '올라', '네'처럼 다른 말에도 흔히 들어가는 말은 넣지 않는다)
+ACCEPT_WORDS = ("받아들", "수락", "승낙", "응한다", "응하겠", "응할게", "제안을받", "제안대로", "그러겠", "그러자고",
+                "태워달", "태워주", "데려다달", "데려다주")
 
 
 def player_asked_for(state, name, args):
@@ -289,13 +327,23 @@ def player_asked_for(state, name, args):
     if name == "go_to":
         words = GO_WORDS.get(str(args.get("target", "")), ())
         return any(w.replace(" ", "") in text for w in words)
+    if name == "travel":
+        words = TRAVEL_WORDS.get(str(args.get("method", "")), ())
+        return any(w.replace(" ", "") in text for w in words)
+    if name == "accept_offer":
+        offer = state.offer or {}
+        # 그 기회를 가리키는 낱말(트럭, 헬기, 초대, 인터뷰, 공관…)이나 분명한 수락 표현이 있어야 한다
+        own = clue_words({"label": str(offer.get("accept", "")), "clue": "", "direction": ""})
+        return any(w.replace(" ", "") in text for w in own if w) or any(w in text for w in ACCEPT_WORDS)
     if name == "follow_lead":
         lead = state.find_lead(args.get("lead_id", ""))
         if lead is None:
             return True                  # 없는 단서는 엔진이 알아서 거절한다
-        words = [w for w in (lead["label"] + " " + lead["clue"]).split() if len(w) >= 2]
-        words += [lead["direction"], lead["direction"].rstrip("쪽")] + list(DIRECTION_WORDS)
-        return any(w.replace(" ", "") in text for w in words if w)
+        # 그 단서를 직접 가리키는 말이 있어야 한다: 단서의 낱말('엔진', '소리', '연기')이나 방위('동쪽').
+        # '바위 쪽으로'처럼 아무 데나 붙는 말이나, '이동'의 '동' 같은 한 글자는 쓰지 않는다.
+        if any(w.replace(" ", "") in text for w in clue_words(lead)):
+            return True
+        return len(state.leads) == 1 and any(w in text for w in POINTING_WORDS)
     return True
 
 
@@ -309,7 +357,7 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
-        elif name in ("go_to", "follow_lead") and not player_asked_for(state, name, args):
+        elif name in ("go_to", "follow_lead", "travel", "accept_offer") and not player_asked_for(state, name, args):
             result = {"error": "플레이어는 그곳으로 가겠다고 하지 않았다. 이동 툴을 쓰지 말고, 지금 있는 자리와 그 근처에서 "
                                "행동을 처리하라(쉴 곳·물·먹을 것을 주변에서 찾기 → advance_time, 찾은 곳으로 옮기면 "
                                "set_scene). 현재 장면과 장소유형은 그대로다."}
