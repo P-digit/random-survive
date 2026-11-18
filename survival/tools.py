@@ -148,14 +148,21 @@ TOOLS = [
         },
     ),
     _function(
+        "go_to",
+        "플레이어가 목적지를 정해 가려 할 때 호출한다. 엔진이 지금 있는 곳과 가진 수단(걷기, 탈것, 버스, 기차, 돈)으로 "
+        "현실적으로 갈 수 있는 만큼만 이동시킨다. 곧장 갈 수 없는 곳이면 먼저 갈 수 있는 곳부터 간다"
+        "(야생에서 공관을 찾으면 먼저 가장 가까운 마을로, 마을에서 공항을 찾으면 먼저 도시로). "
+        "한 턴에 다 못 가면 중간 지점에서 멈추고, 다음 턴에 플레이어가 계속 가겠다고 하면 target='continue'. "
+        "이때는 advance_time, travel 을 따로 호출하지 않는다.",
+        {"target": {"type": "string", "enum": ["village", "city", "embassy", "airport", "continue"],
+                    "description": "village 가장 가까운 마을, city 가장 가까운 도시, embassy 한국 공관, "
+                                   "airport 국제공항, continue 진행 중인 여정을 이어 감"}},
+    ),
+    _function(
         "seek_help",
-        "귀국을 위한 도움. 플레이어가 직접 원하면 이번 턴에 바로 처리된다(기회처럼 기다리지 않는다). "
-        "embassy: 한국 공관(대사관·총영사관)에 연락하고 그곳으로 간다. "
-        "airport: 도시에서 국제공항으로 간다. "
-        "repatriation: 공관 안에서 귀국 지원을 요청한다(가족 송금으로 한국행 항공권 마련). "
-        "조건이 안 되면 이유를 돌려준다(그대로 서술한다).",
-        {"kind": {"type": "string", "enum": ["embassy", "airport", "repatriation"],
-                  "description": "embassy 공관, airport 공항, repatriation 공관에서 귀국 항공권 지원"}},
+        "공관 안에서 플레이어가 한국으로 돌아가고 싶다고 할 때 호출한다. 가족 송금(신속해외송금)으로 한국행 "
+        "항공권이 마련된다. (공관·공항으로 가는 것은 go_to 를 쓴다)",
+        {"kind": {"type": "string", "enum": ["repatriation"], "description": "repatriation 귀국 항공권 지원"}},
     ),
     _function(
         "add_character",
@@ -263,7 +270,7 @@ def execute_tool(state, name, arguments, client=None):
     try:
         if state.status != "playing" and name != "search_survival_guide":
             result = {"error": "게임이 이미 끝났다."}
-        elif name in ("advance_time", "travel", "follow_lead") and state.turn_flags.get("travel", 0) >= 1:
+        elif name in ("advance_time", "travel", "follow_lead", "go_to") and state.turn_flags.get("travel", 0) >= 1:
             result = {"error": "이번 턴에는 이미 이동했다. 한 턴에는 플레이어가 지시한 행동 하나만 처리한다. "
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
@@ -282,6 +289,8 @@ def execute_tool(state, name, arguments, client=None):
         elif name == "remember":
             state.remember(str(args.get("fact", "")), str(args.get("scope", "here")))
             result = {"ok": True}
+        elif name == "go_to":
+            result = state.go_to(str(args.get("target", "")))
         elif name == "seek_help":
             result = state.seek_help(str(args.get("kind", "")))
         elif name == "add_character":
