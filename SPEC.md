@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 159개: 엔진 142 + LLM 어댑터 17)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 173개: 엔진 142 + LLM 어댑터 17 + 배경 소리 14)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -34,6 +34,8 @@
 | `survival/knowledge.py` | 생존 지식 RAG(`data/survival_guide.txt`) |
 | `survival/imagegen.py` | 장면 그림 생성·편집 지시문, Vision으로 그림 읽기, 새로 생긴 구조물 검사 |
 | `survival/languages.py` | 나라별 표지판 언어(151개국) |
+| `survival/sound.py` | 게임 상태 → 배경 소리 층별 크기(0~1) 계산. 화면과 분리된 순수 함수 (10장) |
+| `survival/static/sound.js` | 브라우저 소리 엔진. Web Audio로 합성하고, 상태창의 소리 신호가 바뀌면 층별 크기를 바꿈 |
 | `survival/ui.py` | CSS, HUD(상태창) HTML, 알림 상자, 턴 요약 |
 | `survival/savegame.py` | `saves/autosave.json` 자동 저장·불러오기 |
 | `survival/config.py` | 모든 설정값과 밸런스 수치 |
@@ -93,3 +95,11 @@
 - **그림 형식:** Gemini는 JPEG, OpenAI는 PNG를 준다. `imagegen._save`는 실제 형식(`llm.image_mime`)에 맞는 확장자로 저장하고, `read_image`도 그 형식으로 Vision에 보낸다
 - `google-genai`가 설치되어 있지 않으면 글은 그대로 되고 그림만 실패한다
 - **RAG 임베딩 캐시:** 임베딩 모델별로 따로 둔다(`models/guide_embeddings_<모델>.json`, ChromaDB 컬렉션 `survival_guide_<모델>`)
+
+## 10. 배경 소리 (`survival/sound.py`, `survival/static/sound.js`)
+- **원칙:** 무엇이 얼마나 크게 들려야 하는지는 엔진이 정하고(`soundscape(state)`), 브라우저는 그것을 합성만 한다. 그림과 같은 상태를 써서 그림·서술·소리가 맞는다
+- **층(0~1):** `wind`(지형 기본값 + 실제 풍속, 눈보라·폭풍 가산), `rain`(실제 강수량 비례), `thunder`(폭풍), `birds`(낮, 지형별, 비 오면 줄어듦), `insects`(밤, 지형별, 8°C 미만·눈·폭풍이면 없음, 정글은 낮에도 약하게), `stream`/`waves`/`fire`(장면 이름·GM이 밝힌 것·그림에서 읽은 것에 개울·바다·모닥불이 있을 때), `crowd`/`traffic`(마을·도시·도로·공항, 밤에는 줄어듦)
+- **실내:** 바깥 층은 0.3배(비는 0.5배), 불 소리는 그대로. 브라우저에서는 저역 통과 필터로 먹먹하게 한다
+- **전달:** `app.view`가 상태창 HTML에 `<div id="rs-sound-cue" hidden data-cue="JSON">`을 붙인다. `sound.js`(`launch(head=...)`로 주입)가 MutationObserver로 값 변화를 감지해 2초에 걸쳐 크기를 바꾼다. 신호의 `key`가 같으면 무시한다
+- **브라우저 정책:** 첫 클릭·키 입력 전에는 AudioContext를 만들지 않는다. 켜기/끄기와 크기는 `localStorage`(`rs-sound`)에 저장하고, 막혀 있어도 동작한다
+- 게임이 끝나면(사망·귀환) 모든 층이 0
