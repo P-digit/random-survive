@@ -123,7 +123,7 @@ python app.py --share
 ```bash
 pip install -r requirements-optional.txt   # 선택 패키지: ChromaDB, FastMCP, pytest
 python -m survival.risk_model              # 위험도 모델만 학습하고 평가 결과 보기
-python -m pytest                           # 게임 엔진 테스트 (네트워크·API 키 불필요)
+python -m pytest                           # 테스트 (네트워크·API 키 불필요. GitHub에서는 PR마다 자동 실행)
 fastmcp list mcp_server.py                 # MCP 서버의 툴 목록 확인
 ```
 
@@ -192,7 +192,8 @@ fastmcp list mcp_server.py                 # MCP 서버의 툴 목록 확인
 | 손에 넣은 탈것 | 어디서나 | 남은 연료만큼 | 무료. 보트만 바다를 건넙니다 |
 
 - 도보·히치하이킹·버스·기차와 육로 탈것은 바다에 막히면 실패합니다.
-- 이동은 한 턴에 도착까지 끝납니다. 탈것 안에서 보내는 턴은 없습니다.
+- 수단과 거리를 정해 가는 이동(예: "버스로 300km 간다")은 위 표의 최대 거리 안에서 한 턴에 도착까지 끝납니다. 탈것 안에서 보내는 턴은 없습니다.
+- 목적지를 말해 가는 이동(예: "도시로 간다")은 아래 '목적지로 가기'처럼 한 턴에 최대 10시간씩 나눠 갑니다.
 - 표는 미리 사 둘 수 있습니다. 탈 때까지 기억되고, 타면 요금 없이 탑승한 뒤 소지품에서 사라집니다.
 
 ### 목적지로 가기
@@ -208,7 +209,7 @@ fastmcp list mcp_server.py                 # MCP 서버의 툴 목록 확인
 
 - 곧장 갈 수 없는 곳은 먼저 갈 수 있는 곳부터 갑니다(야생 → 마을, 마을 → 도시 → 공항).
 - 게임 초반(36시간)에는 마을까지만 갈 수 있습니다. 트럭·구조 헬기 같은 기회도 근처 마을까지만 데려다줍니다.
-- 한 턴에 최대 10시간만 이동합니다. 더 걸리면 중간 지점에서 멈추고, "계속 간다"로 다음 턴에 이어 갑니다. 진행 중인 여정은 상태창에 표시됩니다.
+- 목적지로 가는 이동은 한 턴에 최대 10시간만 갑니다. 더 걸리면 중간 지점에서 멈추고, "계속 간다"로 다음 턴에 이어 갑니다. 진행 중인 여정은 상태창에 표시됩니다.
 - 야생에서 가장 가까운 마을까지는 지형에 따라 5~80km입니다(온대림이 가깝고 설원·사막이 멉니다).
 
 ### 한국 공관과 공항
@@ -297,7 +298,14 @@ random-survive/
 ├── mcp_server.py             # 게임 기능을 공개하는 MCP 서버
 ├── survival/
 │   ├── config.py             # 모델 이름, 게임 규칙 수치
-│   ├── state.py              # 게임 상태와 규칙 (엔진)
+│   ├── state.py              # 게임 상태와 공통 규칙 (엔진). 아래 모듈들을 상속
+│   ├── inventory.py          # 소지품·먹고 마시기·돈
+│   ├── crime.py              # 판정·범죄·수배·체포
+│   ├── travel.py             # 이동 수단·표·탈것
+│   ├── journey.py            # 목적지로 가기·공관·공항
+│   ├── offers.py             # 기회(대형 이벤트)
+│   ├── flags.py              # 턴 기록·장소 사정의 키 목록
+│   ├── util.py               # 공용 도구
 │   ├── gamemaster.py         # 한 턴 진행 (Responses API + Tool Calling), 알림, 한국어 정리
 │   ├── llm.py                # LLM 공급자 연결 (OpenAI / Gemini 어댑터: 글·그림)
 │   ├── tools.py              # LLM용 툴 정의와 실행
@@ -317,9 +325,12 @@ random-survive/
 │   ├── static/sound.js       # 브라우저 소리 엔진 (Web Audio 합성)
 │   └── ui.py                 # CSS, 상태창 HTML
 ├── data/survival_guide.txt   # RAG용 생존 지식 문서
-├── tests/test_engine.py      # 엔진 테스트 (네트워크·API 키 없이 실행)
+├── tests/test_*.py          # 주제별 테스트 (state·world·inventory·travel·journey·crime·offers·narration·scene·save)
+├── tests/conftest.py, helpers.py  # 공용 게임 픽스처, 네트워크 차단, 테스트 도우미
 ├── tests/test_llm.py         # LLM 공급자 어댑터 테스트
 ├── tests/test_sound.py       # 배경 소리 테스트 (node가 있으면 sound.js도 가짜 브라우저에서 실행)
+├── tests/test_flags.py       # 턴 기록 키 오탈자 검사
+├── tests/test_structure.py   # 엔진 모듈 구조 테스트
 ├── requirements.txt          # 필수 패키지
 ├── requirements-optional.txt # 선택 패키지 (ChromaDB, FastMCP, pytest)
 ├── .env.example
