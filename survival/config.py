@@ -13,7 +13,7 @@ OUTPUT_DIR = BASE_DIR / "outputs"    # 생성된 이미지 저장 위치
 CHROMA_DIR = BASE_DIR / "chroma_db"  # RAG용 벡터 DB 저장 위치
 SAVE_DIR = BASE_DIR / "saves"        # 자동 저장 파일 위치
 
-# --- OpenAI 모델 (교재에서 사용한 저비용 모델) ---
+# --- LLM 공급자와 모델 (OpenAI 또는 Google Gemini) ---
 def read_api_key(raw):
     """환경변수에서 읽은 키를 검사한다. 쓸 수 없는 값이면 None을 돌려준다.
 
@@ -27,9 +27,30 @@ def read_api_key(raw):
 
 
 OPENAI_API_KEY = read_api_key(os.getenv("OPENAI_API_KEY"))
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+GEMINI_API_KEY = read_api_key(os.getenv("GEMINI_API_KEY"))
+
+
+def choose_provider(requested, openai_key, gemini_key):
+    """LLM 공급자를 고른다. LLM_PROVIDER로 정할 수 있고, 없으면 키가 있는 쪽(둘 다 있으면 OpenAI)."""
+    requested = (requested or "").strip().lower()
+    if requested in ("openai", "gemini"):
+        return requested
+    if not openai_key and gemini_key:
+        return "gemini"
+    return "openai"
+
+
+LLM_PROVIDER = choose_provider(os.getenv("LLM_PROVIDER"), OPENAI_API_KEY, GEMINI_API_KEY)
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+GEMINI_REASONING_EFFORT = os.getenv("GEMINI_REASONING_EFFORT", "low")   # none / low / medium / high
+DEFAULT_MODELS = {   # 공급자별 기본 모델: (글, 임베딩)
+    "openai": ("gpt-4o-mini", "text-embedding-3-small"),
+    "gemini": ("gemini-3.5-flash", "gemini-embedding-001"),
+}
+LLM_MODEL = os.getenv("LLM_MODEL") or DEFAULT_MODELS[LLM_PROVIDER][0]
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1-mini")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or DEFAULT_MODELS[LLM_PROVIDER][1]
+IMAGES_SUPPORTED = LLM_PROVIDER == "openai"   # 장면 그림은 아직 OpenAI Images API로만 그린다
 
 # --- 게임 규칙 ---
 SEOUL = (37.5665, 126.9780)   # 목적지

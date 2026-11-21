@@ -232,7 +232,7 @@ def test_numpy_vector_search_without_chromadb(monkeypatch, tmp_path):
         return [[float(k in t) + 0.01 for k in keys] for t in texts]
 
     monkeypatch.setattr(knowledge, "embed", fake_embed)
-    monkeypatch.setattr(knowledge, "EMBED_CACHE", tmp_path / "e.json")
+    monkeypatch.setattr(knowledge, "embed_cache_path", lambda: tmp_path / "e.json")
     monkeypatch.setattr(knowledge, "_matrix", None)
     docs = knowledge.numpy_search(object(), "여권", n_results=2)
     assert "여권" in docs[0] and (tmp_path / "e.json").exists()
