@@ -19,7 +19,7 @@ def test_hijack_truck_then_drive(game, monkeypatch):
     fix_roll(monkeypatch, 0.0)                                       # 주사위: 성공
     out = call(game, "attempt_action", action="트럭 기사를 기절시킨다", difficulty="hard",
                crime="차량 절도", witnessed="victim", violent=True, item="다용도 칼", stealth=False)
-    assert out["success"] and out["chance"] == "50%" and game.wanted == 16   # hard 35% + 칼 15%, 20×1.3×0.6
+    assert out["success"] and out["chance"] == "60%" and game.wanted == 16   # hard 45%(영화적) + 칼 15%, 20×1.3×0.6
     assert "error" in call(game, "attempt_action", action="또", difficulty="easy", crime="none",
                            witnessed="none", violent=False, item="", stealth=False)    # 한 턴에 한 번
     got = call(game, "acquire_vehicle", kind="truck", name="화물 트럭")
@@ -51,7 +51,7 @@ def test_chance_modifiers():
     random.seed(0)
     out = weak.attempt("창고에 몰래 들어간다", "normal", crime="주거·건물 침입", witnessed="none",
                        violent=False, item="", stealth=True)
-    assert out["chance"] == "40%"                                     # 60 - 15 - 15 + 10(밤)
+    assert out["chance"] == "50%"                                     # 70(영화적 보통) - 15 - 15 + 10(밤)
 
 
 def test_wanted_consequences(game, monkeypatch):
@@ -345,3 +345,61 @@ def test_arrest_confiscates_stolen_goods(game):
     game.begin_turn()
     game.arrest("검문")
     assert "훔친 시계" not in game.items and game.stolen_items == []
+
+
+# ---------- 영화적 연출: 극적인 성공과 가까스로 모면 ----------
+def rolls(monkeypatch, *values):
+    """random.random()이 차례로 돌려줄 값들 (판정 → 극적인 성공/가까스로 모면)."""
+    it = iter(values)
+    monkeypatch.setattr(state_module.random, "random", lambda: next(it))
+
+
+def test_critical_success_escapes_notice_and_pays_more(game, monkeypatch):
+    game.begin_turn()
+    rolls(monkeypatch, 0.0, 0.9)                         # 성공, 그리고 0.85 이상 → 극적인 성공
+    out = game.attempt("시장 좌판의 돈통을 낚아챈다", "normal", crime="절도", witnessed="bystanders",
+                       success_money=40, victim="상인")
+    assert out["success"] and game.turn_flags["attempt"]["critical"]
+    assert game.wanted == 0 and game.money == 50 + 60                 # 목격됐어도 수배되지 않음, $40 × 1.5
+    assert "극적인 성공" in out["안내"] and "극적인 성공!" in out["엔진이_적용한_결과"]
+
+
+def test_ordinary_success_is_unchanged(game, monkeypatch):
+    game.begin_turn()
+    rolls(monkeypatch, 0.0, 0.5)
+    out = game.attempt("시장 좌판의 돈통을 낚아챈다", "normal", crime="절도", witnessed="bystanders",
+                       success_money=40, victim="상인")
+    assert out["success"] and not game.turn_flags["attempt"]["critical"]
+    assert game.wanted == 16 and game.money == 90                      # 20 × 0.8 × 1.0
+
+
+def test_close_call_halves_the_damage(game, monkeypatch):
+    game.begin_turn()
+    rolls(monkeypatch, 0.99, 0.1)                        # 실패, 그리고 0.3 미만 → 가까스로 모면
+    out = game.attempt("경비원을 밀치고 달아난다", "hard", violent=True)
+    assert not out["success"] and game.turn_flags["attempt"]["close_call"]
+    assert game.health == 100 - 10 and "가까스로" in out["안내"]       # hard 20의 절반
+
+
+def test_realistic_style_has_no_movie_moments(game, monkeypatch):
+    from survival import config, crime
+    monkeypatch.setattr(crime, "ATTEMPT_CHANCE", config.ATTEMPT_CHANCES["realistic"])
+    monkeypatch.setattr(crime, "CRITICAL_CHANCE", 0.0)
+    monkeypatch.setattr(crime, "CLOSE_CALL_CHANCE", 0.0)
+    game.begin_turn()
+    rolls(monkeypatch, 0.0, 0.99)
+    out = game.attempt("문을 연다", "normal")
+    assert out["chance"] == "60%" and not game.turn_flags["attempt"]["critical"]
+    game.turn_flags = {}                                  # 다음 시도 (한 턴에 판정은 하나)
+    rolls(monkeypatch, 0.99, 0.0)
+    game.attempt("경비원을 밀친다", "hard", violent=True)
+    assert game.health == 80 and not game.turn_flags["attempt"]["close_call"]
+
+
+def test_movie_moments_show_in_notices_and_instructions(game, monkeypatch):
+    game.begin_turn()
+    rolls(monkeypatch, 0.0, 0.9)
+    game.attempt("경찰을 따돌리며 지붕을 건너뛴다", "hard")
+    assert any("극적인 성공" in n["title"] for n in gamemaster.collect_notices(game))
+    assert "[연출 - 영화처럼]" in gamemaster.INSTRUCTIONS            # 기본은 영화적 연출
+

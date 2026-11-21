@@ -2,7 +2,8 @@
 import random
 
 from . import geo, leads as leads_api
-from .config import (ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CRIMES, MONEY_GAIN_LIMIT, WANTED_AIRPORT_LIMIT,
+from .config import (ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CLOSE_CALL_CHANCE, CRIMES, CRITICAL_CHANCE, MONEY_GAIN_LIMIT,
+                     WANTED_AIRPORT_LIMIT,
                      WANTED_ON_FAIL, WANTED_ON_SUCCESS, WITNESS)
 from .util import clamp
 
@@ -81,12 +82,17 @@ class CrimeMixin:
             reasons.append("어둠을 틈탐 +10%")
         chance = round(min(0.95, max(0.05, chance)), 2)
         success = random.random() < chance
+        # 영화적 연출: 성공 중 일부는 '극적인 성공', 폭력적 실패 중 일부는 '가까스로 모면' (realistic이면 0%)
+        critical = success and random.random() >= 1 - CRITICAL_CHANCE
+        close_call = not success and violent and random.random() < CLOSE_CALL_CHANCE
 
         effects = []
+        if critical:
+            effects.append("극적인 성공!")
         if not success and violent:
-            damage = ATTEMPT_FAIL_DAMAGE[difficulty]
+            damage = ATTEMPT_FAIL_DAMAGE[difficulty] // (2 if close_call else 1)
             self.health = clamp(self.health - damage)
-            effects.append(f"몸싸움 끝에 체력 -{damage}")
+            effects.append(f"{'가까스로 모면했지만 ' if close_call else '몸싸움 끝에 '}체력 -{damage}")
             self._check_death("무모한 시도가 마지막이 되었다")
         crime = crime if crime in CRIMES else "none"
         witnessed = witnessed if witnessed in WITNESS else "none"
@@ -94,14 +100,16 @@ class CrimeMixin:
             if not success and witnessed == "none":
                 witnessed = "victim"       # 실패하면 들키기 마련이다 (피해자·관계자가 알아챔)
             gain = round((WANTED_ON_SUCCESS if success else WANTED_ON_FAIL) * CRIMES[crime] * WITNESS[witnessed])
-            if gain > 0:
+            if gain > 0 and critical:
+                effects.append(f"{crime} — 혼란을 틈타 사라져 수배되지 않음")
+            elif gain > 0:
                 self.wanted = clamp(self.wanted + gain)
                 effects.append(f"{crime} 목격됨 → 수배도 +{gain} (현재 {self.wanted:.0f})")
             else:
                 effects.append(f"{crime} — 목격자 없음, 수배되지 않음")
         rejected = []
         if success:                       # 성공의 대가: 미리 걸어 둔 돈·물건을 엔진이 직접 넣는다
-            gain = round(clamp(float(success_money or 0), 0, MONEY_GAIN_LIMIT), 2)
+            gain = round(clamp(float(success_money or 0) * (1.5 if critical else 1), 0, MONEY_GAIN_LIMIT), 2)
             if gain:
                 self.money = round(self.money + gain, 2)
                 self.turn_flags["earned"] = self.turn_flags.get("earned", 0) + gain
@@ -115,6 +123,7 @@ class CrimeMixin:
                 if got:
                     effects.insert(0, "얻은 물건: " + ", ".join(got))
         self.turn_flags["attempt"] = {"action": str(action)[:40], "chance": chance, "success": success,
+                                      "critical": critical, "close_call": close_call,
                                       "illegal": crime != "none", "crime": crime, "effects": effects,
                                       "victim": str(victim or "").strip()}
         if crime != "none":
@@ -122,10 +131,12 @@ class CrimeMixin:
         return {"success": success, "chance": f"{chance * 100:.0f}%", "보정": reasons or ["없음"],
                 "엔진이_적용한_결과": effects or ["없음"],
                 **({"거부된_물건": rejected} if rejected else {}),
-                "안내": ("성공했다. 걸어 둔 돈·물건은 엔진이 이미 넣었다(다시 넣지 마라). 탈것을 얻었다면 "
-                        "acquire_vehicle 을 호출하라." if success else
-                        "실패했다. 목표를 이루지 못했다. 실패를 그대로 서술하고, 상대의 반응(반격, 신고, 도주)을 "
-                        "현실적으로 그려라. 이미 엔진이 적용한 피해를 다시 적용하지 마라.")}
+                "안내": (("극적인 성공이다. 영화의 한 장면처럼 통쾌하고 화려하게 서술하라. " if critical else "")
+                       + ("가까스로 모면했다. 아슬아슬하게 피한 장면으로 서술하라. " if close_call else "")
+                       + ("성공했다. 걸어 둔 돈·물건은 엔진이 이미 넣었다(다시 넣지 마라). 탈것을 얻었다면 "
+                          "acquire_vehicle 을 호출하라." if success else
+                          "실패했다. 목표를 이루지 못했다. 실패를 그대로 서술하고, 상대의 반응(반격, 신고, 도주)을 "
+                          "현실적으로 그려라. 이미 엔진이 적용한 피해를 다시 적용하지 마라."))}
 
     def _record_crime(self, action, crime, success, witnessed, violent, victim):
         """범죄의 결과를 세계에 남긴다: 피해자의 상태, 게임 내내 유효한 사실, 끝나 버린 제안, 범죄 현장."""
