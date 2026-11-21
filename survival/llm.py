@@ -8,8 +8,9 @@ Gemini는 OpenAI 호환 주소로 Chat Completions만 지원하므로, 여기서
   한다. 어댑터가 응답 id별로 대화 기록을 메모리에 보관하고, `previous_response_id`로 이어 붙인다.
 - 기록이 없으면(프로그램을 다시 켠 뒤 이어하기 등) LookupError를 낸다. `gamemaster.run_turn`은 이때 최근 줄거리를
   넣어 새 대화로 이어가므로 게임은 계속된다.
-- 장면 그림(Images API)은 아직 Gemini로 옮기지 않았다(`IMAGES_SUPPORTED`).
+- 장면 그림: `client.images.generate/edit`(OpenAI Images API 모양)를 Gemini 그림 모델(`google-genai`)로 그린다.
 """
+import base64
 import threading
 import uuid
 from collections import OrderedDict
@@ -140,22 +141,61 @@ class ChatResponses:
         return SimpleNamespace(id=response_id, output=output, output_text=text)
 
 
-class _NoImages:
-    """이 공급자로는 장면 그림을 그릴 수 없다. 부르면 오류를 내고, imagegen은 그림 없이 진행한다."""
+ASPECT_RATIOS = {"1536x1024": "3:2", "1024x1536": "2:3", "1024x1024": "1:1"}
 
-    def generate(self, **_):
-        raise NotImplementedError("Gemini 공급자에서는 아직 장면 그림을 지원하지 않습니다.")
 
-    edit = generate
+def image_mime(data):
+    """그림 바이트의 형식 (Gemini는 JPEG, OpenAI는 PNG를 돌려준다)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+class GeminiImages:
+    """`client.images.generate / edit`를 흉내 낸다. 안에서는 Gemini 그림 모델(generate_content)을 부른다.
+
+    결과는 OpenAI와 같은 모양(`result.data[0].b64_json`)으로 돌려준다. quality 같은 OpenAI 전용 인자는 무시한다.
+    """
+
+    def __init__(self, genai_client):
+        self._genai = genai_client
+
+    def _draw(self, model, contents, size):
+        if self._genai is None:
+            raise RuntimeError("google-genai 패키지가 없어 그림을 그릴 수 없습니다.")
+        from google.genai import types
+        config = types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=types.ImageConfig(aspect_ratio=ASPECT_RATIOS.get(size, "3:2")))
+        response = self._genai.models.generate_content(model=model, contents=contents, config=config)
+        for candidate in getattr(response, "candidates", None) or []:
+            for part in getattr(getattr(candidate, "content", None), "parts", None) or []:
+                data = getattr(getattr(part, "inline_data", None), "data", None)
+                if data:
+                    return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(data).decode())])
+        reason = getattr(getattr(response, "prompt_feedback", None), "block_reason", None)
+        raise RuntimeError(f"그림이 오지 않았습니다{f' (차단: {reason})' if reason else ''}.")
+
+    def generate(self, model, prompt, size="1536x1024", **_ignored):
+        return self._draw(model, prompt, size)
+
+    def edit(self, model, image, prompt, size="1536x1024", **_ignored):
+        from google.genai import types
+        data = image.read() if hasattr(image, "read") else bytes(image)
+        return self._draw(model, [types.Part.from_bytes(data=data, mime_type=image_mime(data)), prompt], size)
 
 
 class GeminiClient:
-    """Gemini를 OpenAI 클라이언트처럼 쓰게 해 주는 묶음: responses(어댑터), embeddings, images(미지원)."""
+    """Gemini를 OpenAI 클라이언트처럼 쓰게 해 주는 묶음: responses·images(어댑터), embeddings(호환 주소)."""
 
-    def __init__(self, chat_client, reasoning_effort=None):
+    def __init__(self, chat_client, reasoning_effort=None, genai_client=None):
         self.responses = ChatResponses(chat_client, reasoning_effort)
         self.embeddings = chat_client.embeddings
-        self.images = _NoImages()
+        self.images = GeminiImages(genai_client)
 
 
 def make_client(provider=LLM_PROVIDER):
@@ -164,7 +204,14 @@ def make_client(provider=LLM_PROVIDER):
     if provider == "gemini":
         if not GEMINI_API_KEY:
             return None
-        return GeminiClient(OpenAI(api_key=GEMINI_API_KEY, base_url=GEMINI_BASE_URL), GEMINI_REASONING_EFFORT)
+        try:
+            from google import genai
+            genai_client = genai.Client(api_key=GEMINI_API_KEY)
+        except ImportError:      # 글은 그대로 되고, 그림만 그리지 못한다
+            print("⚠️  google-genai 패키지가 없어 장면 그림을 그릴 수 없습니다: pip install -r requirements.txt")
+            genai_client = None
+        return GeminiClient(OpenAI(api_key=GEMINI_API_KEY, base_url=GEMINI_BASE_URL), GEMINI_REASONING_EFFORT,
+                            genai_client)
     if not OPENAI_API_KEY:
         return None
     return OpenAI(api_key=OPENAI_API_KEY)

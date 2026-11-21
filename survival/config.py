@@ -43,14 +43,14 @@ def choose_provider(requested, openai_key, gemini_key):
 LLM_PROVIDER = choose_provider(os.getenv("LLM_PROVIDER"), OPENAI_API_KEY, GEMINI_API_KEY)
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GEMINI_REASONING_EFFORT = os.getenv("GEMINI_REASONING_EFFORT", "low")   # none / low / medium / high
-DEFAULT_MODELS = {   # 공급자별 기본 모델: (글, 임베딩)
-    "openai": ("gpt-4o-mini", "text-embedding-3-small"),
-    "gemini": ("gemini-3.5-flash", "gemini-embedding-001"),
+DEFAULT_MODELS = {   # 공급자별 기본 모델: (글, 임베딩, 그림)
+    "openai": ("gpt-4o-mini", "text-embedding-3-small", "gpt-image-1-mini"),
+    "gemini": ("gemini-3.5-flash", "gemini-embedding-001", "gemini-3.1-flash-image"),
 }
 LLM_MODEL = os.getenv("LLM_MODEL") or DEFAULT_MODELS[LLM_PROVIDER][0]
-IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gpt-image-1-mini")
+IMAGE_MODEL = os.getenv("IMAGE_MODEL") or DEFAULT_MODELS[LLM_PROVIDER][2]
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or DEFAULT_MODELS[LLM_PROVIDER][1]
-IMAGES_SUPPORTED = LLM_PROVIDER == "openai"   # 장면 그림은 아직 OpenAI Images API로만 그린다
+IMAGES_SUPPORTED = True   # 두 공급자 모두 장면 그림을 그린다 (Gemini는 llm.GeminiImages)
 
 # --- 게임 규칙 ---
 SEOUL = (37.5665, 126.9780)   # 목적지
