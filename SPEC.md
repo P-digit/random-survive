@@ -81,6 +81,8 @@
 
 ## 8. 테스트
 - `tests/test_engine.py`: 엔진 규칙과 가드 회귀 테스트. 날씨·지명은 `monkeypatch`로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
+- `tests/test_llm.py`: LLM 공급자 어댑터. `tests/test_sound.py`: 배경 소리·효과음(node가 있으면 `tests/js/sound_harness.js`로 sound.js를 가짜 브라우저에서 실행).
+- **CI:** `.github/workflows/tests.yml`이 PR과 main 푸시마다 Python 3.11 + Node 20에서 `node --check`와 `pytest`를 돌린다. API 키·비밀 값은 쓰지 않는다. 키·캐시(`models/` 등)가 없는 깨끗한 체크아웃에서도 통과한다(위험도 모델은 처음에 자동 학습)
 
 ## 9. LLM 공급자 (`survival/llm.py`, `survival/config.py`)
 - **고르기:** `.env`의 `LLM_PROVIDER`(openai/gemini). 없으면 키가 있는 쪽, 둘 다 있으면 OpenAI (`config.choose_provider`)
