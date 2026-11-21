@@ -22,6 +22,9 @@ GIVERS = {"deliver": ("잡화점 주인", "화물 중개인", "우체국 직원"
 PACKAGE = {"deliver": "의뢰받은 소포", "smuggle": "밀수품 꾸러미"}
 ACCEPT_WORDS = re.compile(r"의뢰를?\s*(받|맡|수락)|맡겠|맡을게|맡는다|맡아|수락|받아들|하겠다|할게|좋아|좋다|"
                           r"그러죠|그러겠|배달하겠|운반하겠|가져다주겠|가져다 주겠|가져가겠")
+SEEK_WORDS = re.compile(r"의뢰|일거리|부탁할 일|맡길 일|심부름|배달할|운반할|배달 일|운반 일")
+SEEK_CHANCE = 0.7                             # 마을·도시에서 일거리를 직접 찾으면
+
 DECLINE_WORDS = re.compile(r"거절|사양|싫|안 해|안해|안 하|하지 않|못 하|못하|됐어|관심 없")
 
 
@@ -61,11 +64,13 @@ def accepts_mission(text):
 class MissionMixin:
     """GameState의 의뢰 규칙. GameState가 상속한다(필드는 GameState에 있다)."""
 
-    def roll_mission(self):
+    def roll_mission(self, chance=None):
         """턴 시작에 의뢰인이 나타나는지 굴린다 (마을·도시, 진행 중인 의뢰나 제안이 없을 때)."""
         if self.mission or self.mission_offer or self.status != "playing" or self.pursuit:
             return None
-        if random.random() >= MISSION_CHANCE.get(self.place_type, 0):
+        if self.place_type not in MISSION_CHANCE:
+            return None
+        if random.random() >= (MISSION_CHANCE[self.place_type] if chance is None else chance):
             return None
         kind = "smuggle" if random.random() < (0.6 if self.wanted >= 20 else SMUGGLE_SHARE) else "deliver"
         here = places.nearest_city(self.lat, self.lon)
@@ -83,6 +88,12 @@ class MissionMixin:
         self.mission_offer["direction"] = compass(geo.bearing_deg(self.lat, self.lon, city["lat"], city["lon"]))
         self.turn_flags["mission"] = {"phase": "offered", **self.mission_offer}
         return self.mission_offer
+
+    def seek_mission(self, player_text):
+        """플레이어가 의뢰·일거리를 직접 찾는다: 마을·도시면 이번 턴에 의뢰인이 나타날 확률이 크다."""
+        if SEEK_WORDS.search(player_text or "") and not accepts_mission(player_text):
+            return self.roll_mission(chance=SEEK_CHANCE)
+        return None
 
     def resolve_mission_offer(self, player_text):
         """지난 턴에 나온 의뢰에 대한 플레이어의 대답을 판정한다. 받으면 짐을 받고 의뢰가 시작된다."""

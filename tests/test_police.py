@@ -227,3 +227,29 @@ def test_lay_low_turn_lowers_heat_faster(game, monkeypatch):
     hours = game.delta["hours"]
     assert game.turn_flags["laying_low"] and game.wanted == pytest.approx(30 - 0.3 * hours * 4, abs=0.01)
 
+
+
+def test_disguise_needs_something_to_disguise_with(game):
+    """3회차 플레이 테스트: GM은 '모자·선글라스가 없어 변장 못 함'이라 했는데 엔진은 변장 상태가 됐다."""
+    game.items = ["물 1L", "여권"]
+    assert not game.try_disguise("모자를 눌러쓰고 선글라스를 껴서 변장한다") and not game.disguised
+    assert "물건" in game.turn_flags["disguise"]["why"]
+    game.items.append("낡은 야구 모자")
+    assert game.try_disguise("모자를 눌러쓰고 변장한다") and game.disguised
+    game.disguise, game.items = {}, ["다용도 칼"]
+    assert game.try_disguise("칼로 머리를 짧게 자른다") and game.turn_flags["disguise"]["with"] == ["다용도 칼"]
+    game.disguise, game.items = {}, ["낡은 야구 모자"]
+    assert not game.try_disguise("머리를 짧게 자른다")                     # 모자로는 머리를 자를 수 없다
+
+
+def test_gm_hears_the_disguise_result(game, monkeypatch):
+    game.items = ["물 1L"]
+    seen = []
+
+    def create(**kwargs):
+        seen.append(kwargs)
+        return SimpleNamespace(id="r", output=[], output_text="변장할 것이 없다.")
+    monkeypatch.setattr(gamemaster, "get_client", lambda: SimpleNamespace(responses=SimpleNamespace(create=create)))
+    gamemaster.run_turn(game, "모자를 눌러쓰고 선글라스를 껴서 변장한다")
+    assert "[변장 - 엔진 판정]" in seen[0]["input"] and "변장하지 못했다" in seen[0]["input"]
+    assert not game.disguised

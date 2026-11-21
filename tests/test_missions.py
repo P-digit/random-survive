@@ -158,3 +158,15 @@ def test_old_saves_load_without_missions(game):
     data.pop("mission_offer")
     again = GameState(**data)
     assert again.mission is None and not again.carrying_contraband
+
+
+def test_asking_for_work_brings_a_mission_giver(game, monkeypatch):
+    """3회차 플레이 테스트: '의뢰가 있는지 묻는다'에 매번 '의뢰는 없다'는 답만 돌아왔다."""
+    monkeypatch.setattr(missions.random, "random", lambda: 0.5)          # 평소 확률(15%)로는 안 나오는 값
+    game.place_type = "야생"
+    assert game.seek_mission("의뢰가 있는지 사람들에게 묻는다") is None
+    game.place_type = "도시"
+    assert game.roll_mission() is None
+    offer = game.seek_mission("의뢰가 있는지 사람들에게 묻는다")             # 직접 찾으면 70%
+    assert offer and game.turn_flags["mission"]["phase"] == "offered"
+    assert game.seek_mission("일거리를 찾는다") is None                      # 이미 제안이 있다
