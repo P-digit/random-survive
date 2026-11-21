@@ -16,8 +16,9 @@ from survival.llm import describe_provider, missing_key_message
 from survival.gamemaster import get_client, run_turn
 from survival.state import create_game
 from survival.weather import weather_category
+from survival.sound import soundscape
 from survival.ui import (CSS, INTRO_MESSAGE, TITLE_HTML, render_hud, render_location,
-                         render_notices, turn_summary)
+                         render_notices, render_sound_cue, sound_head, turn_summary)
 
 
 def make(component, **kwargs):
@@ -51,7 +52,7 @@ def view(state, chat, busy=False):
     return (
         state,
         chat,
-        render_hud(state),
+        render_hud(state) + render_sound_cue(soundscape(state)),   # 상태창에 배경 소리 신호를 함께 싣는다
         render_location(state),
         state.image_path if state is not None else None,
         *buttons,
@@ -175,7 +176,7 @@ def play(message, state, use_image):
 def build_app():
     blocks_kwargs = {"title": "랜덤 좌표 생존기"}
     # Gradio 5는 css/theme를 Blocks에, Gradio 6은 launch에 넘긴다
-    style = {"css": CSS, "theme": gr.themes.Base(primary_hue="amber", neutral_hue="stone")}
+    style = {"css": CSS, "theme": gr.themes.Base(primary_hue="amber", neutral_hue="stone"), "head": sound_head()}
     css_in_launch = "css" in inspect.signature(gr.Blocks.launch).parameters
     if not css_in_launch:
         blocks_kwargs.update(style)

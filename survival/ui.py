@@ -1,5 +1,7 @@
 """화면 꾸미기: CSS와 HUD(상태창) HTML 생성."""
+import json
 from html import escape
+from pathlib import Path
 
 from . import geo
 from .config import EARLY_GAME_HOURS, TRAVEL_RULES
@@ -152,6 +154,14 @@ footer { display: none !important; }
 .banner small { display: block; font-family: 'IBM Plex Sans KR', sans-serif; font-size: 12px;
   letter-spacing: 0; color: var(--muted); margin-top: 4px; }
 .empty { color: var(--muted); font-size: 13px; line-height: 1.8; }
+
+/* 배경 소리 켜기/끄기와 크기 (static/sound.js가 만든다) */
+#rs-sound-controls { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; gap: 8px;
+  align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); color: var(--text); font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+#rs-sound-controls button { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; padding: 2px 4px; }
+#rs-sound-controls input { width: 90px; accent-color: var(--amber); }
+#rs-sound-controls input:disabled { opacity: .4; }
 """
 
 TITLE_HTML = """
@@ -404,3 +414,18 @@ def render_hud(state):
 
     parts.append('</div>')
     return "".join(parts)
+
+
+# ---------- 배경 소리 ----------
+SOUND_JS_PATH = Path(__file__).resolve().parent / "static" / "sound.js"
+
+
+def sound_head():
+    """페이지 <head>에 넣을 소리 엔진 스크립트."""
+    return "<script>\n" + SOUND_JS_PATH.read_text(encoding="utf-8") + "\n</script>"
+
+
+def render_sound_cue(cue):
+    """소리 신호를 화면에 싣는다. 보이지 않는 요소이고, sound.js가 값이 바뀌는 것을 감지해 소리를 바꾼다."""
+    data = escape(json.dumps(cue, ensure_ascii=False, separators=(",", ":")), quote=True)
+    return f'<div id="rs-sound-cue" hidden data-cue="{data}"></div>'
