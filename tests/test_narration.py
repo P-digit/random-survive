@@ -1,8 +1,9 @@
 """GM 서술 보정: 한국어·바뀐 장소·몸 상태 (survival/gamemaster.py) 테스트."""
+import json
 from types import SimpleNamespace
 
 from survival import gamemaster
-from tests.helpers import desert_noon
+from tests.helpers import desert_noon, reply_with
 
 
 def test_foreign_script_is_detected_and_removed():
@@ -93,3 +94,56 @@ def test_no_rewrite_when_band_unchanged(game, monkeypatch):
     game.health = 90
     body = gamemaster.run_turn(game, "주변을 둘러본다")
     assert len(calls) == 1 and f"체력 {round(game.health)}" in body
+
+
+# ---------- 서술 속의 돈: 플레이 테스트에서 실제로 나온 문장들 ----------
+def test_money_sentences_are_classified_by_direction():
+    m = gamemaster.money_mentions
+    assert m("아침이 되자 아바카르는 수고했다며 수고비로 **10 달러를 건네줍니다**.") == [(10, "in")]
+    assert m("그는 **$70의 여비까지 챙겨 주겠다**며 같이 가자고 합니다.") == [(70, "promise")]
+    assert m("주인에게 $12를 건네고 방 열쇠를 받는다.") == [(12, "out")]
+    assert m("작은 가게에 5달러를 내고 빵 2개를 샀습니다.") == [(5, "out")]
+    assert m("노인이 당신에게 $20를 주었다.") == [(20, "in")]
+    assert m("소매치기에게 $40를 빼앗겼다.") == [(40, "loss")]
+    assert m("버스 요금은 $12 정도다.") == [(12, "unknown")]
+    assert m("일을 도우면 $30를 받을 수 있다고 한다.") == [(30, "unknown")]
+    # 2회차 플레이 테스트의 문장들
+    assert m("일한 대가로 **카를로스는 현금 $15를 수고비로 건넸습니다**.") == [(15, "in")]
+    assert m("빵과 생수를 내어주고, 4달러를 셈하여 받아 갑니다.") == [(4, "out")]
+    assert m("카를로스에게 $5를 지불하고 행랑채에서 잠을 청합니다.") == [(5, "out")]
+
+
+def test_reward_handed_to_player_is_not_charged(game, monkeypatch):
+    """보고된 경우 A: GM이 툴로 +$10을 줬는데 '10 달러를 건네줍니다'를 지불로 읽어 -$10 하던 문제."""
+    tool = SimpleNamespace(id="r1", output_text="", output=[SimpleNamespace(
+        type="function_call", name="update_status", call_id="a", arguments=json.dumps(
+            {"health": 0, "satiety": 0, "hydration": 0, "energy": -10, "money": 10, "money_source": "earned",
+             "consumed_items": [], "reason": "밤새 일한 수고비"}))])
+    reply_with(monkeypatch, tool, SimpleNamespace(id="r2", output=[], output_text=(
+        "아침이 되자 아바카르는 수고했다며 수고비로 **10 달러를 건네줍니다**.")))
+    gamemaster.run_turn(game, "일을 해서 돈을 번다")
+    assert game.money == 60
+    assert not any("💸" in n["title"] or "💵" in n["title"] for n in game.notices)   # 서술에 금액이 있다
+
+
+def test_promised_money_is_not_paid_yet(game, monkeypatch):
+    """보고된 경우 B: '$70의 여비까지 챙겨 주겠다'는 제안을 받은 돈으로 처리하던 문제."""
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text=(
+        "한 교민 남성이 자신의 집으로 초대하며 **$70의 여비까지 챙겨 주겠다**며 같이 가자고 합니다.")))
+    gamemaster.run_turn(game, "가족에게 연락한다")
+    assert game.money == 50
+
+
+def test_unexplained_tool_payment_gets_a_notice(game, monkeypatch):
+    """보고된 경우 C: GM이 pay로 $50을 썼는데 서술에 없어서 플레이어가 이유를 모르던 문제."""
+    def turn(text):
+        tool = SimpleNamespace(id="r1", output_text="", output=[SimpleNamespace(
+            type="function_call", name="pay", call_id="a", arguments=json.dumps(
+                {"amount": 20, "purpose": "운전기사 사례비"}))])
+        reply_with(monkeypatch, tool, SimpleNamespace(id="r2", output=[], output_text=text))
+        gamemaster.run_turn(game, "히치하이킹으로 도시로 간다")
+        return [n["title"] for n in game.notices]
+    titles = turn("길가에서 한참 차를 기다렸지만 차는 오지 않는다.")
+    assert game.money == 30 and "💸 지출 -$20 — 운전기사 사례비" in titles
+    titles = turn("기사에게 사례비로 $20를 건네고 트럭에 오른다.")
+    assert game.money == 10 and not any("💸" in t for t in titles)          # 서술에 있으면 알림 없음

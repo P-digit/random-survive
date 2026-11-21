@@ -244,3 +244,18 @@ def test_full_drink_of_measured_water_caps_gm_gain(game, monkeypatch):
     call(game, "update_status", health=0, satiety=0, hydration=30, energy=0, money=0, money_source="none",
          consumed_items=[], reason="개울물")
     assert game.hydration == 60 + 30
+
+
+def test_drinking_from_a_stream_does_not_use_carried_water(game, monkeypatch):
+    """보고된 경우(플레이 테스트 2회 재현): '개울을 찾아 물을 마신다'에서 개울을 못 찾았는데 가진 물 1L가 사라졌다."""
+    game.hydration = 40
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text=(
+        "한 시간을 헤맸지만 개울은 찾을 수 없었다. 가지고 있는 **물 1L**만이 유일한 수분 공급원이다.")))
+    gamemaster.run_turn(game, "개울을 찾아 물을 마신다")
+    assert "물 1L" in game.items and game.hydration < 40                    # 마시지 않았다 (시간만 흘렀다)
+    game.items.append("샘물 1병")                                           # 떠 둔 샘물은 소지품이다
+    game.hydration = 40
+    reply_with(monkeypatch, SimpleNamespace(id="r2", output=[], output_text="떠 둔 샘물을 마신다."))
+    gamemaster.run_turn(game, "샘물을 마신다")
+    assert "샘물 1병" not in game.items and "물 1L" in game.items and game.hydration > 40   # 더 구체적인 이름
+
