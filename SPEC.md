@@ -1,0 +1,79 @@
+# SPEC.md — 랜덤 좌표 생존기 시스템 명세
+
+> 코드 기준 명세. 규칙·수치의 원본은 코드(`survival/config.py`, `survival/state.py`)이고, 이 문서는 구조와 책임을 요약한다.
+> 플레이어용 설명은 `README.md`에 있다.
+
+## 1. 개요
+- **장르:** LLM 게임 마스터(GM)가 서술하는 한국어 텍스트 생존 게임
+- **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
+- **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API + Function Calling(GM), Images API + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
+- **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 필요)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 엔진만 검증. 현재 135개)
+
+## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
+- GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
+- GM이 툴을 빠뜨리거나 서술이 엔진 상태와 어긋나는 경우를 막는 **사후 보정 단계**가 있다(5장).
+- 판정을 GM보다 **엔진이 먼저** 할 수 있는 것(기회 수락·되풀이, 범죄 의도)은 GM 호출 전에 판정해 결과만 GM에게 전달한다.
+
+## 3. 모듈별 책임
+
+| 모듈 | 책임 |
+|---|---|
+| `app.py` | Gradio 화면 구성, 새 게임/이어하기, 턴 실행(`play`), 장면 그림 갱신 여부 판단 |
+| `survival/state.py` | `GameState` 데이터클래스와 모든 게임 규칙: 시간 흐름, 생체 수치, 소지품, 이동·여정, 기회(offer), 범죄·수배·체포, 단서, 장면, 턴 시작/종료 |
+| `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
+| `survival/tools.py` | GM이 호출하는 툴 스키마(`TOOLS`)와 실행(`execute_tool`), 툴 남용·요청하지 않은 행동 차단 가드, 기회 수락/되풀이 판정(`offer_action`) |
+| `survival/events.py` | 바이옴 판별, 돌발 이벤트 178개, 대형 이벤트(기회) 9종, 수락/거절 어휘 |
+| `survival/leads.py` | 단서(lead) 생성과 정체 공개: 단서가 생길 때 정체·방향·거리를 미리 확정 |
+| `survival/intent.py` | 플레이어 입력의 범죄 의도 판정(키워드 + 조사 처리) |
+| `survival/geo.py` | 랜덤 육지 좌표, 역지오코딩, 거리·방위 계산 |
+| `survival/places.py` | 실제 도시 248곳(공관·국제공항 여부 포함), 가까운 도시 찾기 |
+| `survival/weather.py` / `climate.py` | 실제 현재 날씨·16일 시간별 예보 / 최근 1년 기록 기반 기후대(8종)·계절 |
+| `survival/risk_model.py` | RandomForest 위험도 예측(안전/주의/위험). 합성 데이터로 첫 실행 시 학습, `models/`에 저장 |
+| `survival/knowledge.py` | 생존 지식 RAG(`data/survival_guide.txt`) |
+| `survival/imagegen.py` | 장면 그림 생성·편집 지시문, Vision으로 그림 읽기, 새로 생긴 구조물 검사 |
+| `survival/languages.py` | 나라별 표지판 언어(151개국) |
+| `survival/ui.py` | CSS, HUD(상태창) HTML, 알림 상자, 턴 요약 |
+| `survival/savegame.py` | `saves/autosave.json` 자동 저장·불러오기 |
+| `survival/config.py` | 모든 설정값과 밸런스 수치 |
+| `mcp_server.py` | 엔진 기능 일부(좌표, 날씨, 위험도, 지식 검색)를 FastMCP 서버로 공개 |
+
+## 4. 핵심 데이터: `GameState` (`survival/state.py`)
+- **위치:** `lat`, `lon`, `place_name(_en)`, `country_code`, `place_type`(야생/마을/도시), `biome`, `distance`(서울까지 km)
+- **생체 수치(0~100, `clamp`):** `health`, `satiety`, `hydration`, `energy`
+- **자원:** `money`(USD), `items`, `tickets`, `vehicle`
+- **시간:** `elapsed_hours`, `start_hour`, `utc_offset`(현재 위치 현지 시각), `turn`
+- **환경:** `weather`, `forecast`, `climate`, `risk`
+- **이야기 정합성:** `leads`(단서), `facts`(확정 사실), `characters`, `scene_*`(현재 장면), `journey`(여러 턴 이동)
+- **기회:** `offer`(진행 중), `expired_offers`, `done_offers`(받아들이거나 거절해 끝난 기회. 재등장·되풀이 차단용)
+- **범죄:** `wanted`(0~100), `crime_scene`, `enemies`, `notorious`, `stolen_items`
+- **턴 임시값:** `turn_flags`, `delta`, `notices`, `event`
+- **상태 머신:** `status` = `playing` → `won`(서울 60km 이내) | `dead`(체력 0, `death_reason`)
+- **분리 계획(`refactor/state-split`):** 기회 필드·메서드(`offer`, `*_offers`, `accept_offer` 등) → 기회 모듈, 여정(`journey`, `go_to`, `_advance_journey` 등) → 여정 모듈, 범죄(`wanted`, `crime_scene`, `enemies`, `notorious`, `stolen_items`, `attempt`, `arrest` 등) → 범죄 모듈. `GameState`는 데이터와 턴 경계(`begin_turn`/`end_turn`)만 남긴다. 저장 파일(`savegame`) 호환을 위해 필드 이름은 유지한다
+
+## 5. 한 턴의 흐름 (`gamemaster.run_turn`)
+1. `state.begin_turn()`: 스냅샷, 위험도 갱신, 돌발 이벤트 굴림, 대형 이벤트(기회) 굴림(방금 놓쳤거나 끝낸 기회, 범죄자로 알려진 곳의 도움 제안은 제외)
+2. 입력 사전 판정: 범죄 의도(`crime_intent`), 기회 수락·되풀이(`resolve_offer_action` → `offer_action`)
+3. GM 호출(Responses API, `previous_response_id`로 멀티턴). 대화를 잃으면 `make_recap`으로 새 대화를 시작
+4. 툴 루프(최대 `MAX_TOOL_ROUNDS`=5): `execute_tool` → 결과 전달 → 재호출
+5. 엔진 사후 보정: `guard_unrequested_move`, `auto_decline`, `auto_consume`, `auto_eat`, `settle_consumption`, `auto_charge`, `auto_money`
+6. `state.end_turn()`: GM이 시간을 흘리지 않았으면 입력으로 추정(`estimate_time`), 지난 기회 만료(제안은 나온 다음 턴까지만 유효), 사망·귀환 판정
+7. 서술 보정: `ensure_korean` → `ensure_scene` → `ensure_vitals` → `enforce_redo`
+8. 추천 행동 3개 확정(기회가 살아 있으면 1번은 '받아들이기')
+9. `app.play`: 알림 + 서술 + 턴 요약 표시, 자동 저장, 필요하면 장면 그림 생성/편집
+
+## 6. GM 툴 (`survival/tools.py`)
+`advance_time`, `update_status`, `update_inventory`, `travel`, `attempt_action`, `add_lead`, `follow_lead`, `remember`, `go_to`, `seek_help`, `add_character`, `pay`, `acquire_vehicle`, `arrest`, `buy_ticket`, `accept_offer`, `decline_offer`, `set_scene`, `reject_event`, `search_survival_guide`
+
+주요 가드: 플레이어가 말하지 않은 이동·차량 획득 차단, 한 턴 시간 중복 차단, 끝난 기회 되풀이 시 지급 차단(`redo_problem`), 출처 없는 이득 차단(`gain_problem`), 돈 증가 상한 `MONEY_GAIN_LIMIT`.
+
+## 7. 주요 규칙 수치 (`survival/config.py`)
+- 시작: 물 1L, 에너지바 2개, 라이터, 다용도 칼, 여권, 스마트폰(배터리 30%), $50
+- 판정 성공률: easy 0.85 / normal 0.60 / hard 0.35 / very_hard 0.15
+- 초반 `EARLY_GAME_HOURS`=36시간 동안은 마을까지만 이동(최대 60km)
+- 한 턴 이동 최대 `JOURNEY_MAX_HOURS`=10시간, 넘으면 `journey`로 다음 턴에 이어감
+- 대형 이벤트 확률 0.10, 8턴 동안 없으면 확정 발생
+- 수배도 50 이상이면 공항·항구에서 붙잡힐 수 있음
+
+## 8. 테스트
+- `tests/test_engine.py`: 엔진 규칙과 가드 회귀 테스트. 날씨·지명은 `monkeypatch`로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
