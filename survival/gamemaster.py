@@ -5,7 +5,7 @@ import re
 from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT
 from .llm import make_client, missing_key_message
 from .intent import crime_intent
-from .state import item_core
+from .inventory import consumable_effect, item_core
 from .tools import TOOLS, execute_tool
 
 INSTRUCTIONS = """
@@ -684,7 +684,6 @@ def auto_eat(state, player_text):
 
     GM이 소지품에서 지우기만 한 경우에도(먹은 것 칸이 아니라) 먹은 것으로 기록해 회복을 보장한다.
     """
-    from .state import consumable_effect
     text = (player_text or "").replace(" ", "")
     wants = []
     if any(v.replace(" ", "") in text for v in DRINK_VERBS):

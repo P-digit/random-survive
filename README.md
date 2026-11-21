@@ -298,7 +298,14 @@ random-survive/
 ├── mcp_server.py             # 게임 기능을 공개하는 MCP 서버
 ├── survival/
 │   ├── config.py             # 모델 이름, 게임 규칙 수치
-│   ├── state.py              # 게임 상태와 규칙 (엔진)
+│   ├── state.py              # 게임 상태와 공통 규칙 (엔진). 아래 모듈들을 상속
+│   ├── inventory.py          # 소지품·먹고 마시기·돈
+│   ├── crime.py              # 판정·범죄·수배·체포
+│   ├── travel.py             # 이동 수단·표·탈것
+│   ├── journey.py            # 목적지로 가기·공관·공항
+│   ├── offers.py             # 기회(대형 이벤트)
+│   ├── flags.py              # 턴 기록·장소 사정의 키 목록
+│   ├── util.py               # 공용 도구
 │   ├── gamemaster.py         # 한 턴 진행 (Responses API + Tool Calling), 알림, 한국어 정리
 │   ├── llm.py                # LLM 공급자 연결 (OpenAI / Gemini 어댑터: 글·그림)
 │   ├── tools.py              # LLM용 툴 정의와 실행
@@ -321,6 +328,8 @@ random-survive/
 ├── tests/test_engine.py      # 엔진 테스트 (네트워크·API 키 없이 실행)
 ├── tests/test_llm.py         # LLM 공급자 어댑터 테스트
 ├── tests/test_sound.py       # 배경 소리 테스트 (node가 있으면 sound.js도 가짜 브라우저에서 실행)
+├── tests/test_flags.py       # 턴 기록 키 오탈자 검사
+├── tests/test_structure.py   # 엔진 모듈 구조 테스트
 ├── requirements.txt          # 필수 패키지
 ├── requirements-optional.txt # 선택 패키지 (ChromaDB, FastMCP, pytest)
 ├── .env.example

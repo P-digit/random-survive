@@ -15,6 +15,7 @@ from survival.events import classify_biome, roll_event  # noqa: E402
 from survival.risk_model import predict_risk, train  # noqa: E402
 from survival.state import GameState  # noqa: E402
 from survival import tools as tools_module  # noqa: E402
+from tests.helpers import patch_everywhere  # noqa: E402
 from survival.tools import TOOLS, execute_tool  # noqa: E402
 
 
@@ -30,7 +31,7 @@ def fake_weather(temperature=20.0, **overrides):
 @pytest.fixture
 def game(monkeypatch):
     """네트워크 호출을 모두 가짜로 바꾼 게임 상태 (몽골 초원에서 시작)."""
-    monkeypatch.setattr(state_module, "get_weather", lambda lat, lon: fake_weather())
+    patch_everywhere(monkeypatch, "get_weather", lambda lat, lon: fake_weather())   # state, travel, ...
     monkeypatch.setattr(geo, "reverse_geocode", lambda lat, lon: {"name": "테스트 지역"})
     monkeypatch.setattr(geo, "is_land", lambda lat, lon: True)
     monkeypatch.setattr(state_module, "EARLY_GAME_HOURS", 0)   # 대부분의 테스트는 초반 제한 없이 (따로 테스트함)
@@ -1499,7 +1500,7 @@ def test_the_reported_case_rain_and_tree(game, monkeypatch):
 
 
 def test_arrival_place_is_rule_based_not_random():
-    from survival.state import arrival_place
+    from survival.travel import arrival_place
     far, near = {"km": 500}, {"km": 10}
     assert arrival_place("walk", far) == "야생" and arrival_place("drive", far) == "야생"
     assert arrival_place("walk", near) == "도시"
@@ -2208,7 +2209,7 @@ def test_gm_accept_call_after_engine_accept_is_not_double(game, monkeypatch):
 
 
 # ---------- 일부만 마시기: "조금 마신다"가 물 한 병을 통째로 없애지 않는다 ----------
-from survival.state import consumable_effect, liquid_ml, partial_portion, with_volume  # noqa: E402
+from survival.inventory import consumable_effect, liquid_ml, partial_portion, with_volume  # noqa: E402
 
 
 def test_volume_helpers():

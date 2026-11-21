@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 185개: 엔진 142 + LLM 어댑터 17 + 소리 22 + 플래그 키 4)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 190개: 엔진 142 + LLM 어댑터 17 + 소리 22 + 플래그 키 4 + 구조 5)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -20,7 +20,13 @@
 | 모듈 | 책임 |
 |---|---|
 | `app.py` | Gradio 화면 구성, 새 게임/이어하기, 턴 실행(`play`), 장면 그림 갱신 여부 판단 |
-| `survival/state.py` | `GameState` 데이터클래스와 모든 게임 규칙: 시간 흐름, 생체 수치, 소지품, 이동·여정, 기회(offer), 범죄·수배·체포, 단서, 장면, 턴 시작/종료 |
+| `survival/state.py` | `GameState` 데이터클래스(모든 필드)와 공통 규칙: 시간 흐름, 생체 수치, 날씨·기후, 장면·인물, 단서와 사실, 턴 시작/종료, `create_game`. 아래 믹스인 5개를 상속한다 |
+| `survival/inventory.py` | `InventoryMixin`: 소지품 넣고 빼기, 먹고 마시기(용량·일부만 마시기), 돈 쓰기. 소지품 판정 함수(`item_core`, `consumable_effect` 등) |
+| `survival/crime.py` | `CrimeMixin`: 자유 행동 판정, 범죄 기록·목격·수배도, 원한을 가진 사람, 체포 |
+| `survival/travel.py` | `TravelMixin`: 이동 수단(`travel`), 요금·표, 탈것과 운전, 새 장소 도착(`arrival_place`) |
+| `survival/journey.py` | `JourneyMixin`: 목적지로 가기(`go_to`), 여러 턴 여정, 공관·공항, 귀국 지원 |
+| `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
+| `survival/util.py` | `clamp` 등 여러 모듈이 함께 쓰는 작은 도구 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
 | `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
 | `survival/tools.py` | GM이 호출하는 툴 스키마(`TOOLS`)와 실행(`execute_tool`), 툴 남용·요청하지 않은 행동 차단 가드, 기회 수락/되풀이 판정(`offer_action`) |
@@ -82,6 +88,8 @@
 
 ## 8. 테스트
 - `tests/test_engine.py`: 엔진 규칙과 가드 회귀 테스트. 날씨·지명은 `monkeypatch`로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
+- `tests/test_structure.py`: `GameState`가 믹스인으로 이루어졌는지, 메서드 이름이 겹치지 않는지, 나누기 전 메서드가 모두 있는지, 믹스인이 `state`를 가져오지 않는지(순환 import).
+- **네트워크 차단(`tests/conftest.py`):** 모든 테스트에서 외부 접속을 막고, 막힌 시도가 한 번이라도 있으면 실패시킨다(날씨 조회처럼 오류를 삼키는 코드도 잡는다). 이름을 가져다 쓰는 함수를 가짜로 바꿀 때는 `tests/helpers.patch_everywhere`로 모든 `survival` 모듈을 함께 바꾼다
 - `tests/test_flags.py`: 코드에서 쓰는 `turn_flags`/`flags` 키가 `flags.py`에 모두 적혀 있고 적힌 키가 쓰이는지(오탈자 방지).
 - `tests/test_llm.py`: LLM 공급자 어댑터. `tests/test_sound.py`: 배경 소리·효과음(node가 있으면 `tests/js/sound_harness.js`로 sound.js를 가짜 브라우저에서 실행).
 - **CI:** `.github/workflows/tests.yml`이 PR과 main 푸시마다 Python 3.11 + Node 20에서 `node --check`와 `pytest`를 돌린다. API 키·비밀 값은 쓰지 않는다. 키·캐시(`models/` 등)가 없는 깨끗한 체크아웃에서도 통과한다(위험도 모델은 처음에 자동 학습)
