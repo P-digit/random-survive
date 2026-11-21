@@ -2,7 +2,7 @@
 import json
 
 from . import knowledge
-from .config import CRIMES, TRAVEL_RULES
+from .config import CRIMES, MEASURED_DRINK_SLACK, TRAVEL_RULES
 
 
 def _function(name, description, properties):
@@ -60,6 +60,8 @@ TOOLS = [
                                             "lost 잃음·빼앗김·벌금(-), none 변화 없음"},
             "consumed_items": {"type": "array", "items": {"type": "string"},
                                "description": "이 행동으로 먹거나 마시거나 써서 없어진 소지품의 이름들. "
+                                              "플레이어가 '조금·한 모금·반만' 마셨어도 그 물의 이름을 적는다"
+                                              "(엔진이 마신 양만큼만 줄이고 나머지를 남긴다). "
                                               "받아 둔 빗물, 딴 열매처럼 환경에서 얻어 소지품에 넣어 둔 것도 "
                                               "쓰면 반드시 여기에 적는다. 없으면 빈 배열"},
             "reason": {"type": "string", "description": "변화의 이유를 한 문장으로"},
@@ -545,15 +547,30 @@ def execute_tool(state, name, arguments, client=None):
                 and gain_problem(state, str(args.get("source", "found")), str(args.get("giver", ""))):
             result = {"error": gain_problem(state, str(args.get("source", "found")), str(args.get("giver", "")))}
         elif name == "update_status":
+            eaten_before = len(state.turn_flags.get("eaten") or [])
+            used, sipped = [], []          # 다 쓴 것 / 일부만 마신 것
+            for item_name in args.get("consumed_items") or []:
+                partial_before = len(state.turn_flags.get("partial") or [])
+                if state.consume_item(item_name):
+                    (sipped if len(state.turn_flags.get("partial") or []) > partial_before else used).append(item_name)
+            hydration = float(args.get("hydration", 0))
+            drunk = [e for e in (state.turn_flags.get("eaten") or [])[eaten_before:] if e["stat"] == "hydration"]
+            if drunk and all(e.get("partial") or e.get("measured") for e in drunk):
+                # 용량이 정해진 물이다: 조금만 마셨으면 마신 양만큼, 다 마셨어도 그 용량의 1.2배까지만 오른다
+                # (용량을 모르는 강물·음식 등이 섞여 있으면 GM의 판단을 따른다)
+                hydration = min(hydration, round(sum(e["amount"] * (1 if e.get("partial") else MEASURED_DRINK_SLACK)
+                                                     for e in drunk)))
             state.apply_delta(
                 health=float(args.get("health", 0)), satiety=float(args.get("satiety", 0)),
-                hydration=float(args.get("hydration", 0)), energy=float(args.get("energy", 0)),
+                hydration=hydration, energy=float(args.get("energy", 0)),
                 money=float(args.get("money", 0)), reason=str(args.get("reason", "")),
             )
-            if float(args.get("satiety", 0)) > 0 or float(args.get("hydration", 0)) > 0:
+            if float(args.get("satiety", 0)) > 0 or hydration > 0:
                 state.turn_flags["intake"] = True
-            used = [n for n in args.get("consumed_items") or [] if state.consume_item(n)]
             result = {"ok": True, "사라진_소지품": used}
+            if sipped:
+                result["일부만_마심"] = state.turn_flags["partial"][-len(sipped):]
+                result["안내"] = "플레이어는 일부만 마셨다. 남은 물은 소지품에 그대로 있다. 다 마셨다고 서술하지 마라."
         elif name == "update_inventory":
             rejected = state.update_items(add=args.get("add"), remove=args.get("remove"))
             result = {"ok": True}
