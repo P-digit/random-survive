@@ -2205,3 +2205,95 @@ def test_gm_accept_call_after_engine_accept_is_not_double(game, monkeypatch):
     assert game.items.count("생수 2병") == 1 and len(game.done_offers) == 1
     assert gamemaster.enforce_redo("상자 안에는 아무것도 들어 있지 않다.", {"kind": "redo", "message": "x",
                                                                        "items": []}) == "상자 안에는 아무것도 들어 있지 않다."
+
+
+# ---------- 일부만 마시기: "조금 마신다"가 물 한 병을 통째로 없애지 않는다 ----------
+from survival.state import consumable_effect, liquid_ml, partial_portion, with_volume  # noqa: E402
+
+
+def test_volume_helpers():
+    assert liquid_ml("물 1L") == 1000 and liquid_ml("생수 500ml") == 500 and liquid_ml("물 1.5L") == 1500
+    assert liquid_ml("에너지바 2개") is None and liquid_ml("스마트폰(배터리 30%)") is None
+    assert with_volume("물 1L", 750) == "물 750ml" and with_volume("물 2L", 1500) == "물 1.5L"
+    assert consumable_effect("물 1L") == ("hydration", 45)                  # 기존 값 그대로
+    assert consumable_effect("물 500ml") == ("hydration", 22)               # 용량에 비례
+    assert consumable_effect("물 250ml") == ("hydration", 11)
+
+
+def test_partial_portion_wording():
+    assert partial_portion("가진 물을 조금 마신다", 1000) == 250
+    assert partial_portion("물을 한 모금 마신다", 1000) == 250
+    assert partial_portion("물을 아껴서 마신다", 1000) == 250
+    assert partial_portion("물을 반만 마신다", 1000) == 500
+    assert partial_portion("물을 절반 마신다", 600) == 300
+    assert partial_portion("물을 마신다", 1000) is None
+    assert partial_portion("물을 마시고 조금 쉰다", 1000) is None           # '조금'이 쉬는 것에 붙음
+    assert partial_portion("반드시 물을 마신다", 1000) is None
+    assert partial_portion("모금함 옆에서 물을 마신다", 1000) is None
+    assert partial_portion("물을 조금 마신다", 250) is None                 # 남은 게 한 모금뿐이면 다 마신다
+
+
+def test_sipping_keeps_the_rest_when_gm_does_nothing(game, monkeypatch):
+    """보고된 증상: GM이 툴 없이 서술만 해도 '조금 마신다'면 남은 물이 남는다."""
+    game.hydration = 50
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text="당신은 물을 한 모금 마신다."))
+    gamemaster.run_turn(game, "가진 물을 조금 마신다")
+    assert "물 750ml" in game.items and "물 1L" not in game.items
+    assert 50 + 11 - 2 <= game.hydration <= 50 + 11                        # 250ml 만큼만
+    from survival.ui import turn_summary
+    assert "💧 수분 +11 (물)" in turn_summary(game)
+
+
+def test_sipping_caps_gm_gain_and_reports_remaining(game, monkeypatch):
+    """GM이 물 한 병을 다 마신 만큼(+45) 줘도 반만 마셨으면 반만큼만 오르고, 남은 물을 툴 결과로 알려 준다."""
+    game.hydration = 40
+    big = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_status", call_id="a", arguments=json.dumps(
+            {"health": 0, "satiety": 0, "hydration": 45, "energy": 0, "money": 0, "money_source": "none",
+             "consumed_items": ["물 1L"], "reason": "물을 마심"}))])
+    reply_with(monkeypatch, big, SimpleNamespace(id="r2", output=[], output_text="물을 반쯤 마신다."))
+    gamemaster.run_turn(game, "물을 반만 마신다")
+    assert "물 500ml" in game.items
+    assert 40 + 22 - 2 <= game.hydration <= 40 + 23
+    game.turn_flags = {"player_text": "물을 한 모금 마신다"}
+    result = call(game, "update_status", health=0, satiety=0, hydration=30, energy=0, money=0,
+                  money_source="none", consumed_items=["물 500ml"], reason="한 모금")
+    assert result["일부만_마심"] == ["물 500ml → 물 250ml (250ml 마심)"] and result["사라진_소지품"] == []
+    assert "물 250ml" in game.items
+
+
+def test_gm_removing_bottle_on_a_sip_leaves_the_rest(game, monkeypatch):
+    """GM이 '물 1L'을 지우기만 해도, 조금 마셨으면 남은 물을 남긴다. GM이 직접 남은 양을 넣으면 그대로 따른다."""
+    game.hydration = 40
+    only_remove = SimpleNamespace(id="r1", output_text="", output=[
+        SimpleNamespace(type="function_call", name="update_inventory", call_id="a", arguments=json.dumps(
+            {"add": [], "remove": ["물 1L"], "source": "none", "giver": ""}))])
+    reply_with(monkeypatch, only_remove, SimpleNamespace(id="r2", output=[], output_text="목을 축인다."))
+    gamemaster.run_turn(game, "물을 조금 마신다")
+    assert "물 750ml" in game.items and game.hydration >= 40 + 11 - 2
+
+    game.items = ["물 1L"]
+    game.turn_flags = {"player_text": "물을 조금 마신다"}
+    game.update_items(add=["물 800ml"], remove=["물 1L"])
+    assert game.items == ["물 800ml"]
+
+
+def test_full_drink_still_empties_the_bottle(game, monkeypatch):
+    game.hydration = 40
+    reply_with(monkeypatch, SimpleNamespace(id="r", output=[], output_text="물을 다 마신다."))
+    gamemaster.run_turn(game, "물을 전부 마신다")
+    assert not any(liquid_ml(i) for i in game.items) and game.hydration >= 40 + 45 - 2
+
+
+def test_full_drink_of_measured_water_caps_gm_gain(game, monkeypatch):
+    """남은 물 375ml(기본 +17)를 다 마실 때 GM이 +35를 줘도 1.2배(+20)까지만. 강물처럼 용량을 모르는 것은 GM을 따른다."""
+    game.items = ["물 375ml"]
+    game.hydration = 40
+    game.turn_flags = {"player_text": "남은 물을 전부 마신다"}
+    call(game, "update_status", health=0, satiety=0, hydration=35, energy=0, money=0, money_source="none",
+         consumed_items=["물 375ml"], reason="다 마심")
+    assert game.hydration == 40 + 20 and game.items == []
+    game.turn_flags = {"player_text": "개울물을 끓여 마신다"}
+    call(game, "update_status", health=0, satiety=0, hydration=30, energy=0, money=0, money_source="none",
+         consumed_items=[], reason="개울물")
+    assert game.hydration == 60 + 30

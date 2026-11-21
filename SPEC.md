@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 152개: 엔진 135 + LLM 어댑터 17)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 159개: 엔진 142 + LLM 어댑터 17)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -70,6 +70,7 @@
 
 ## 7. 주요 규칙 수치 (`survival/config.py`)
 - 시작: 물 1L, 에너지바 2개, 라이터, 다용도 칼, 여권, 스마트폰(배터리 30%), $50
+- 먹고 마시기: `CONSUMABLES` 표의 기본 회복량을 엔진이 보장(`settle_consumption`). 용량이 적힌 마실 것은 용량에 비례(`HYDRATION_PER_LITER`=45/L). "조금·한 모금·아껴·반만" 마시면 `sip_item`이 용량만 줄인다(`SIP_ML`=250ml, 반은 절반). 일부만 마신 턴에는 GM이 준 수분을 마신 양만큼으로, 용량이 적힌 물을 다 마신 턴에는 기본 회복량의 `MEASURED_DRINK_SLACK`(1.2)배로 깎는다(강물·음식처럼 용량을 모르는 것이 섞이면 GM을 따른다)
 - 판정 성공률: easy 0.85 / normal 0.60 / hard 0.35 / very_hard 0.15
 - 초반 `EARLY_GAME_HOURS`=36시간 동안은 마을까지만 이동(최대 60km)
 - 한 턴 이동 최대 `JOURNEY_MAX_HOURS`=10시간, 넘으면 `journey`로 다음 턴에 이어감

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from . import climate as climate_api
 from . import geo, leads as leads_api, places
-from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CONSUMABLES, CRIMES,
+from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CONSUMABLES, CRIMES, HYDRATION_PER_LITER, SIP_ML,
                      EARLY_GAME_HOURS, EARLY_MAX_TRAVEL_KM, MONEY_GAIN_LIMIT,
                      JOURNEY_MAX_HOURS, VILLAGE_DISTANCE,
                      DIURNAL_AMPLITUDE, LAND_METHODS, WITNESS,
@@ -56,10 +56,49 @@ def arrival_place(method, city):
     return "도시" if near <= 15 else "야생"
 
 
+VOLUME = re.compile(r"(\d+(?:\.\d+)?)\s*(ml|mL|ML|밀리리터|L|l|리터)(?![A-Za-z])")
+# 일부만 마신다는 표현. '반'은 '반드시·반대' 같은 말과 섞이지 않게 붙는 말까지 본다
+SIP_WORDS = re.compile(r"(?:한|두|세|몇|\d+)\s*모금|살짝|아껴|조금(?:만|씩)?\s*(?:마시|마셔|마신|들이|목을)|입만\s*축")
+HALF_WORDS = re.compile(r"절반|반쯤|반만|반\s*병|반\s*정도|반을\s*(?:마시|마셔|마신|들이)")
+
+
+def liquid_ml(name):
+    """'물 1L' → 1000, '생수 500ml' → 500. 용량이 적혀 있지 않으면 None."""
+    match = VOLUME.search(name)
+    if not match:
+        return None
+    value = float(match.group(1))
+    return round(value if match.group(2).lower() in ("ml", "밀리리터") else value * 1000)
+
+
+def with_volume(name, ml):
+    """이름의 용량을 바꾼다: ('물 1L', 750) → '물 750ml', ('물 2L', 1500) → '물 1.5L'."""
+    label = f"{ml / 1000:g}L" if ml >= 1000 else f"{ml}ml"
+    return VOLUME.sub(label, name, count=1)
+
+
+def partial_portion(text, ml):
+    """플레이어가 일부만 마신다고 했으면 이번에 마시는 양(ml). 다 마시면 None."""
+    text = text or ""
+    if HALF_WORDS.search(text):
+        used = ml // 2
+    elif SIP_WORDS.search(text):
+        used = SIP_ML
+    else:
+        return None
+    return used if 0 < used < ml else None
+
+
 def consumable_effect(name):
-    """먹거나 마시는 물건이면 (오르는 수치, 기본 회복량). 아니면 None."""
+    """먹거나 마시는 물건이면 (오르는 수치, 기본 회복량). 아니면 None.
+
+    용량이 적힌 마실 것은 용량에 비례한다(1L = +45, 500ml = +22). 한 번에 오르는 양은 8~60.
+    """
     for words, stat, amount in CONSUMABLES:
         if any(w in name for w in words):
+            ml = liquid_ml(name) if stat == "hydration" else None
+            if ml:
+                amount = max(8, min(60, round(HYDRATION_PER_LITER * ml / 1000)))
             return stat, amount
     return None
 
@@ -80,8 +119,8 @@ def item_problem(name):
 
 
 def item_core(name):
-    """'에너지바 2개', '빗물(1회분)' → '에너지바', '빗물' : 수량과 괄호를 뗀 물건 이름."""
-    core = re.sub(r"\(.*?\)|\d+(?:\.\d+)?\s*(?:개|병|L|l|리터|회분|모금|장|통|캔|봉지|알)?", "", name)
+    """'에너지바 2개', '빗물(1회분)', '물 750ml' → '에너지바', '빗물', '물' : 수량과 괄호를 뗀 물건 이름."""
+    core = re.sub(r"\(.*?\)|\d+(?:\.\d+)?\s*(?:개|병|ml|mL|ML|밀리리터|L|l|리터|회분|모금|장|통|캔|봉지|알)?", "", name)
     return core.replace(" ", "")
 
 
@@ -475,11 +514,37 @@ class GameState:
                     return item
         return None
 
+    def sip_item(self, item):
+        """플레이어가 '조금·한 모금·반만' 마신다고 했으면 용량만 줄이고 True. 아니면 False.
+
+        '물 1L'을 조금 마시면 '물 750ml'가 남고, 마신 양만큼만 회복한다.
+        """
+        effect = consumable_effect(item)
+        ml = liquid_ml(item)
+        if not effect or effect[0] != "hydration" or not ml:
+            return False
+        used = partial_portion(self.turn_flags.get("player_text", ""), ml)
+        if not used:
+            return False
+        left = with_volume(item, ml - used)
+        self.items[self.items.index(item)] = left
+        self.turn_flags["consumed"] = True
+        amount = max(1, round(HYDRATION_PER_LITER * used / 1000))
+        self.turn_flags.setdefault("eaten", []).append({"item": item_core(item) or item, "stat": "hydration",
+                                                        "amount": amount, "partial": True})
+        self.turn_flags.setdefault("partial", []).append(f"{item} → {left} ({used}ml 마심)")
+        return True
+
     def consume_item(self, name):
-        """물건을 한 번 써서 없앤다. '에너지바 2개'처럼 수량이 있으면 하나만 줄인다."""
+        """물건을 한 번 써서 없앤다. '에너지바 2개'처럼 수량이 있으면 하나만 줄인다.
+
+        용량이 적힌 마실 것을 일부만 마신다고 했으면 용량만 줄인다(sip_item).
+        """
         item = self.find_item(name)
         if item is None:
             return False
+        if self.sip_item(item):
+            return True
         count = re.search(r"(\d+)\s*(개|병|장|캔|봉지|알)", item)
         index = self.items.index(item)
         if count and int(count.group(1)) > 1:
@@ -491,7 +556,8 @@ class GameState:
         effect = consumable_effect(item)
         if effect:
             self.turn_flags.setdefault("eaten", []).append({"item": item_core(item) or item, "stat": effect[0],
-                                                            "amount": effect[1]})
+                                                            "amount": effect[1],
+                                                            "measured": liquid_ml(item) is not None})
         return True
 
     def settle_consumption(self):
@@ -514,8 +580,13 @@ class GameState:
     def update_items(self, add=None, remove=None):
         """소지품을 추가/제거한다. 넣을 수 없는 것은 거부하고 그 목록을 반환한다."""
         rejected = []
+        added = {item_core(str(e.get("name", "") if isinstance(e, dict) else e)) for e in add or []}
         for name in remove or []:
             item = self.find_item(name)
+            # GM이 '물 1L'을 지우기만 했는데 플레이어는 조금만 마셨다: 남은 물을 남긴다
+            # (GM이 직접 '물 750ml'를 넣어 주는 경우는 GM의 처리를 따른다)
+            if item and item_core(item) not in added and self.sip_item(item):
+                continue
             if item:
                 self.items.remove(item)
                 self.turn_flags["consumed"] = True
