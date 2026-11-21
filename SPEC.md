@@ -75,7 +75,7 @@
 - 먹고 마시기: `CONSUMABLES` 표의 기본 회복량을 엔진이 보장(`settle_consumption`). 용량이 적힌 마실 것은 용량에 비례(`HYDRATION_PER_LITER`=45/L). "조금·한 모금·아껴·반만" 마시면 `sip_item`이 용량만 줄인다(`SIP_ML`=250ml, 반은 절반). 일부만 마신 턴에는 GM이 준 수분을 마신 양만큼으로, 용량이 적힌 물을 다 마신 턴에는 기본 회복량의 `MEASURED_DRINK_SLACK`(1.2)배로 깎는다(강물·음식처럼 용량을 모르는 것이 섞이면 GM을 따른다)
 - 판정 성공률: easy 0.85 / normal 0.60 / hard 0.35 / very_hard 0.15
 - 초반 `EARLY_GAME_HOURS`=36시간 동안은 마을까지만 이동(최대 60km)
-- 한 턴 이동 최대 `JOURNEY_MAX_HOURS`=10시간, 넘으면 `journey`로 다음 턴에 이어감
+- 이동은 두 가지다. 수단·거리를 정한 이동(`travel` 툴)은 `TRAVEL_RULES`의 최대 거리 안에서 한 턴에 끝난다. 목적지를 말한 이동(`go_to` 툴, `journey`)은 한 턴에 최대 `JOURNEY_MAX_HOURS`=10시간씩 가고, 남으면 다음 턴에 이어간다
 - 대형 이벤트 확률 0.10, 8턴 동안 없으면 확정 발생
 - 수배도 50 이상이면 공항·항구에서 붙잡힐 수 있음
 
