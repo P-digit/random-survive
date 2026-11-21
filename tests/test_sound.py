@@ -130,7 +130,7 @@ def test_sound_engine_runs_in_a_fake_browser(game):
         pytest.skip("node가 없어 소리 엔진 실행 테스트를 건너뜀")
     game.scene_features = ["모닥불"]
     game.weather.update(code=61, precipitation=2.0)
-    cue = sound.soundscape(game)
+    cue = dict(sound.soundscape(game), sfx=sound.turn_sfx(game))
     harness = Path(__file__).resolve().parent / "js" / "sound_harness.js"
     out = subprocess.run([node, str(harness), str(ui.SOUND_JS_PATH), json.dumps(cue)],
                          capture_output=True, text=True, timeout=30)
@@ -147,3 +147,85 @@ def test_sound_engine_runs_in_a_fake_browser(game):
     assert result["muted"]["on"] is False and "🔇" in result["muted"]["label"]
     assert json.loads(result["muted"]["saved"])["on"] is False
     assert result["errors"] == []
+    assert set(result["effects"]) == set(sound.SFX)          # 엔진이 고르는 효과음을 브라우저가 모두 안다
+    assert result["sfxPlayed"] > len(sound.SFX)              # 모든 효과음이 오류 없이 울렸다
+    assert result["sfxReplayed"] == 0 and result["sfxWhileMuted"] == 0
+    assert result["hidden"] == {"running": False, "played": 0} and result["visibleAgain"] is True
+
+
+# ---------- 사건 효과음 ----------
+def sfx(state):
+    return sound.turn_sfx(state)["events"]
+
+
+def test_quiet_turn_has_no_effects(game):
+    game.turn_flags = {"travel": 0, "time": 0, "intake": False, "consumed": False}
+    assert sfx(game) == [] and sound.turn_sfx(None) == {"events": [], "nonce": ""}
+
+
+def test_effects_follow_what_happened(game):
+    game.turn_flags = {"attempt": {"success": True}, "moved": {"how": "도보", "km": 5}}
+    assert sfx(game) == ["success", "travel"]
+    game.turn_flags = {"attempt": {"success": False}, "arrested": {"where": "검문소"}}
+    assert sfx(game) == ["arrest", "fail"]
+    game.turn_flags = {"new_lead": "L1"}
+    assert sfx(game) == ["clue"]
+    game.turn_flags = {"lead_result": {"danger": False}, "new_lead": "L2"}
+    assert sfx(game) == ["discover"]                       # 단서를 확인한 턴에는 새 단서 소리를 겹치지 않는다
+    game.turn_flags = {"offer_declined": {"accept": "트럭에 탄다"}}
+    assert sfx(game) == ["dismiss"]
+
+
+def test_danger_offer_and_lucky_events(game):
+    game.turn_flags = {}
+    game.event = {"kind": "danger", "text": "늑대"}
+    assert sfx(game) == ["danger"]
+    game.event = {"kind": "lucky", "text": "열매"}
+    game.offer = {"id": "trucker", "turn": game.turn, "accept": "트럭에 탄다"}
+    assert sfx(game) == ["offer", "lucky"]
+    game.offer["turn"] = game.turn - 1                     # 지난 턴에 나온 기회는 다시 울리지 않는다
+    assert sfx(game) == ["lucky"]
+
+
+def test_at_most_three_effects_most_important_first(game):
+    game.turn_flags = {"arrested": {"where": "검문소"}, "attempt": {"success": False}, "new_lead": "L1",
+                       "ticket": {"item": "버스표"}, "moved": {"how": "버스"}}
+    game.event = {"kind": "danger"}
+    assert sfx(game) == ["arrest", "fail", "danger"]
+
+
+def test_win_and_death_replace_everything(game):
+    game.turn_flags = {"moved": {}, "attempt": {"success": True}}
+    game.status = "won"
+    assert sfx(game) == ["win"]
+    game.status = "dead"
+    assert sfx(game) == ["death"]
+
+
+def test_nonce_changes_every_turn_and_game(game):
+    first = sound.turn_sfx(game)["nonce"]
+    assert sound.turn_sfx(game)["nonce"] == first          # 같은 턴의 화면 갱신은 같은 값
+    game.turn += 1
+    game.elapsed_hours += 0.5
+    assert sound.turn_sfx(game)["nonce"] != first
+    game.turn, game.elapsed_hours, game.lat = 0, 0, game.lat + 1   # 새 게임의 같은 턴 번호
+    assert sound.turn_sfx(game)["nonce"] != first
+
+
+def test_every_engine_effect_is_known():
+    assert set(sound.SFX) == {"win", "death", "arrest", "success", "fail", "danger", "offer", "discover", "clue",
+                              "lucky", "engine", "ticket", "travel", "dismiss"}
+
+
+def test_resume_view_sends_the_turn_without_effects(game, monkeypatch):
+    """이어하기 화면은 저장된 마지막 턴의 효과음을 다시 울리지 않는다(같은 nonce, 빈 목록)."""
+    import app
+    game.turn_flags = {"attempt": {"success": True}}
+    loud = app.sound_cue(game)
+    quiet = app.sound_cue(game, quiet=True)
+
+    def payload(rendered):
+        return json.loads(html.unescape(rendered.split('data-cue="', 1)[1].rsplit('"', 1)[0]))
+    assert payload(loud)["sfx"]["events"] == ["success"]
+    assert payload(quiet)["sfx"] == {"events": [], "nonce": payload(loud)["sfx"]["nonce"]}
+    assert payload(quiet)["layers"] == payload(loud)["layers"]

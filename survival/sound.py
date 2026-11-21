@@ -101,3 +101,57 @@ def soundscape(state):
     layers = {name: _clamp(layers.get(name, 0.0)) for name in LAYERS}
     key = "|".join(f"{name}:{layers[name]}" for name in LAYERS) + f"|in:{int(indoor)}"
     return {"layers": layers, "indoor": indoor, "key": key}
+
+
+# ---------- 사건 효과음 ----------
+# 이번 턴에 일어난 중요한 일 → 짧은 효과음. 중요 알림(gamemaster.collect_notices)과 같은 기록(turn_flags)을 본다.
+SFX = ("win", "death", "arrest", "success", "fail", "danger", "offer", "discover", "clue", "lucky", "engine",
+       "ticket", "travel", "dismiss")
+MAX_SFX = 3   # 한 턴에 많아도 세 개까지 (중요한 것부터)
+
+
+def turn_sfx(state):
+    """이번 턴의 효과음. {"events": [이름...], "nonce": 턴마다 다른 값}
+
+    같은 턴의 화면이 여러 번 갱신되어도(진행 중 표시, 그림 갱신) nonce가 같으니 브라우저는 한 번만 울린다.
+    """
+    if state is None:
+        return {"events": [], "nonce": ""}
+    nonce = f"{state.turn}:{state.elapsed_hours:g}:{state.lat:.4f}:{state.lon:.4f}:{state.status}"
+    if state.status == "won":
+        return {"events": ["win"], "nonce": nonce}
+    if state.status == "dead":
+        return {"events": ["death"], "nonce": nonce}
+
+    flags = state.turn_flags or {}
+    events = []
+    if flags.get("arrested"):
+        events.append("arrest")
+    result = flags.get("offer_result")
+    if result:
+        events.append("fail" if result.get("bad") else "success")
+    attempt = flags.get("attempt")
+    if attempt:
+        events.append("success" if attempt.get("success") else "fail")
+    found = flags.get("lead_result")
+    if found:
+        events.append("danger" if found.get("danger") else "discover")
+    event = state.event or {}
+    if event.get("kind") == "danger" and not found:
+        events.append("danger")
+    if state.offer and state.offer.get("turn") == state.turn:
+        events.append("offer")
+    if flags.get("new_lead") and not found:
+        events.append("clue")
+    if event.get("kind") == "lucky":
+        events.append("lucky")
+    if flags.get("vehicle") and state.vehicle:
+        events.append("engine")
+    if flags.get("ticket"):
+        events.append("ticket")
+    if flags.get("moved"):
+        events.append("travel")
+    if flags.get("offer_declined") or flags.get("offer_expired") or \
+            (flags.get("pre_offer") or {}).get("kind") == "redo":
+        events.append("dismiss")
+    return {"events": list(dict.fromkeys(events))[:MAX_SFX], "nonce": nonce}

@@ -3,6 +3,8 @@
  * 엔진(survival/sound.py)이 정한 소리 신호를 상태창 안의 <div id="rs-sound-cue" data-cue="..."> 로 받는다.
  * 그 값이 바뀌면 층별 크기를 2초에 걸쳐 부드럽게 바꾼다. 모든 소리는 노이즈·발진기로 합성한다.
  * 브라우저는 사용자가 클릭하기 전에는 소리를 낼 수 없으므로, 첫 클릭(예: '낙하 시작')에서 시작한다.
+ *
+ * 같은 신호의 sfx({events, nonce})는 이번 턴의 사건 효과음이다. nonce가 바뀔 때 한 번만 울린다.
  */
 (() => {
   if (window.rsSound) return;
@@ -20,7 +22,8 @@
   })();
   const savePrefs = () => { try { localStorage.setItem(STORE, JSON.stringify(prefs)); } catch (e) { /* 저장 불가 */ } };
 
-  let ctx = null, master = null, muffle = null;
+  let ctx = null, master = null, muffle = null, sfxBus = null;
+  let lastNonce = null;
   const layers = {};            // 이름 → GainNode (층의 크기)
   let target = { layers: {}, indoor: false, key: "silent" };
   let lastKey = null;
@@ -200,6 +203,92 @@
     }
   }
 
+  // ---------- 사건 효과음 (이번 턴에 일어난 중요한 일) ----------
+  const NOTE = (name) => {   // "C5" → 주파수
+    const steps = { C: -9, D: -7, E: -5, F: -4, G: -2, A: 0, B: 2 }[name[0]];
+    const sharp = name[1] === "#" ? 1 : 0;
+    const octave = Number(name.slice(sharp ? 2 : 1));
+    return 440 * Math.pow(2, (steps + sharp + (octave - 4) * 12) / 12);
+  };
+
+  function tone(at, frequency, { type = "sine", length = 0.3, level = 0.5, attack = 0.01, glide = null,
+                                 cutoff = null } = {}) {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(frequency, at);
+    if (glide) osc.frequency.exponentialRampToValueAtTime(glide, at + length);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, at);
+    env.gain.exponentialRampToValueAtTime(level, at + attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, at + length);
+    if (cutoff) chain(osc, filter("lowpass", cutoff), env, sfxBus);
+    else chain(osc, env, sfxBus);
+    osc.start(at);
+    osc.stop(at + length + 0.05);
+  }
+
+  function sweep(at, from, peak, to, length, level = 0.5) {   // 바람 가르는 소리 (이동)
+    const source = ctx.createBufferSource();
+    source.buffer = noise.pink;
+    const band = filter("bandpass", from, 1.2);
+    band.frequency.setValueAtTime(from, at);
+    band.frequency.exponentialRampToValueAtTime(peak, at + length * 0.45);
+    band.frequency.exponentialRampToValueAtTime(to, at + length);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, at);
+    env.gain.exponentialRampToValueAtTime(level, at + length * 0.45);
+    env.gain.exponentialRampToValueAtTime(0.0001, at + length);
+    chain(source, band, env, sfxBus);
+    source.start(at, Math.random() * 2);
+    source.stop(at + length + 0.05);
+  }
+
+  function thump(at, level = 0.9) {   // 낮은 북소리 (위험)
+    tone(at, 120, { length: 0.5, level, glide: 40 });
+    const source = ctx.createBufferSource();
+    source.buffer = noise.brown;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, at);
+    env.gain.exponentialRampToValueAtTime(level * 0.6, at + 0.01);
+    env.gain.exponentialRampToValueAtTime(0.0001, at + 0.35);
+    chain(source, filter("lowpass", 200), env, sfxBus);
+    source.start(at);
+    source.stop(at + 0.4);
+  }
+
+  const notes = (at, names, gap, options) => names.forEach((n, i) => tone(at + i * gap, NOTE(n), options));
+
+  const SFX = {
+    offer: (t) => notes(t, ["C6", "E6", "G6", "C7"], 0.1, { length: 0.9, level: 0.25 }),
+    success: (t) => notes(t, ["G5", "C6"], 0.12, { type: "triangle", length: 0.45, level: 0.35 }),
+    fail: (t) => notes(t, ["E4", "C4"], 0.18, { type: "square", length: 0.45, level: 0.12, cutoff: 1500 }),
+    danger: (t) => { thump(t); thump(t + 0.32, 0.7); tone(t + 0.05, NOTE("C#3"), { type: "sawtooth", length: 1.2,
+                                                                                   level: 0.08, cutoff: 600 }); },
+    clue: (t) => { tone(t, NOTE("E6"), { length: 0.35, level: 0.25 }); tone(t + 0.22, NOTE("E6"), { length: 0.35, level: 0.1 }); },
+    discover: (t) => notes(t, ["D5", "F#5", "A5"], 0.1, { type: "triangle", length: 0.5, level: 0.3 }),
+    lucky: (t) => notes(t, ["E6", "G#6", "B6", "E7", "B6"], 0.06, { length: 0.4, level: 0.15 }),
+    travel: (t) => sweep(t, 250, 2200, 500, 1.3, 0.6),
+    engine: (t) => { tone(t, 45, { type: "sawtooth", length: 0.9, level: 0.25, glide: 90, cutoff: 400, attack: 0.05 }); },
+    ticket: (t) => { tone(t, 2093, { length: 0.25, level: 0.2 }); tone(t + 0.1, 2637, { length: 0.4, level: 0.2 }); },
+    arrest: (t) => { for (let i = 0; i < 4; i++) tone(t + i * 0.35, i % 2 ? 960 : 720, { type: "triangle", length: 0.34,
+                                                                                         level: 0.2, attack: 0.03 }); },
+    dismiss: (t) => tone(t, 330, { type: "triangle", length: 0.35, level: 0.2, glide: 220 }),
+    win: (t) => { notes(t, ["C5", "E5", "G5"], 0.14, { type: "triangle", length: 0.4, level: 0.3 });
+                  ["C5", "E5", "G5", "C6"].forEach((n) => tone(t + 0.45, NOTE(n), { type: "triangle", length: 1.8, level: 0.18 })); },
+    death: (t) => ["A3", "C4", "E4"].forEach((n, i) => tone(t + i * 0.25, NOTE(n), { length: 2.6, level: 0.18,
+                                                                                    attack: 0.2, cutoff: 900 })),
+  };
+
+  function playSfx(events) {
+    if (!ctx || ctx.state !== "running" || !prefs.on) return;
+    let at = ctx.currentTime + 0.05;
+    for (const name of events) {
+      if (!SFX[name]) continue;
+      SFX[name](at);
+      at += 0.6;   // 여러 개면 차례로
+    }
+  }
+
   // ---------- 적용 ----------
   function applyTarget(smooth = 1.0) {
     if (!ctx) return;
@@ -226,6 +315,8 @@
       master.gain.value = 0;
       muffle = filter("lowpass", 18000);
       chain(muffle, master, ctx.destination);
+      sfxBus = ctx.createGain();   // 효과음은 실내에서도 먹먹해지지 않는다
+      chain(sfxBus, master);
       noise = { white: makeNoise("white"), pink: makeNoise("pink"), brown: makeNoise("brown") };
       buildContinuous();
       setInterval(tick, 250);
@@ -240,6 +331,11 @@
     if (!nodes.length) return;
     let cue;
     try { cue = JSON.parse(nodes[nodes.length - 1].dataset.cue || "{}"); } catch (e) { return; }
+    if (cue.sfx && cue.sfx.nonce !== lastNonce) {
+      const first = lastNonce === null;   // 페이지를 연 직후 이미 화면에 있던 신호는 지난 일이다
+      lastNonce = cue.sfx.nonce;
+      if (!first) playSfx(cue.sfx.events || []);
+    }
     if (!cue.layers || cue.key === lastKey) return;
     lastKey = cue.key;
     target = cue;
@@ -286,6 +382,12 @@
     });
     // 브라우저 정책: 첫 클릭·키 입력 뒤에만 소리를 낼 수 있다
     for (const type of ["pointerdown", "keydown"]) document.addEventListener(type, start, { capture: true });
+    // 다른 탭으로 가면 멈추고 돌아오면 다시 켠다 (그동안의 효과음이 한꺼번에 터지지 않게)
+    document.addEventListener("visibilitychange", () => {
+      if (!ctx) return;
+      if (document.hidden) ctx.suspend();
+      else if (prefs.on) ctx.resume();
+    });
   }
 
   window.rsSound = {
@@ -294,6 +396,8 @@
     // 지금 층별 목표 크기 (확인·디버깅용)
     levels: () => Object.fromEntries(LAYERS.map((name) => [name, layers[name] ? layers[name].gain.value : null])),
     running: () => Boolean(ctx) && ctx.state === "running",
+    play: (events) => playSfx(events),   // 효과음 미리 듣기·확인용
+    effects: Object.keys(SFX),
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();

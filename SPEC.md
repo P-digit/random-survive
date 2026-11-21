@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 173개: 엔진 142 + LLM 어댑터 17 + 배경 소리 14)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 181개: 엔진 142 + LLM 어댑터 17 + 소리 22)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -34,7 +34,7 @@
 | `survival/knowledge.py` | 생존 지식 RAG(`data/survival_guide.txt`) |
 | `survival/imagegen.py` | 장면 그림 생성·편집 지시문, Vision으로 그림 읽기, 새로 생긴 구조물 검사 |
 | `survival/languages.py` | 나라별 표지판 언어(151개국) |
-| `survival/sound.py` | 게임 상태 → 배경 소리 층별 크기(0~1) 계산. 화면과 분리된 순수 함수 (10장) |
+| `survival/sound.py` | 게임 상태 → 배경 소리 층별 크기(0~1), 이번 턴의 사건 효과음 선택. 화면과 분리된 순수 함수 (10장) |
 | `survival/static/sound.js` | 브라우저 소리 엔진. Web Audio로 합성하고, 상태창의 소리 신호가 바뀌면 층별 크기를 바꿈 |
 | `survival/ui.py` | CSS, HUD(상태창) HTML, 알림 상자, 턴 요약 |
 | `survival/savegame.py` | `saves/autosave.json` 자동 저장·불러오기 |
@@ -103,3 +103,7 @@
 - **전달:** `app.view`가 상태창 HTML에 `<div id="rs-sound-cue" hidden data-cue="JSON">`을 붙인다. `sound.js`(`launch(head=...)`로 주입)가 MutationObserver로 값 변화를 감지해 2초에 걸쳐 크기를 바꾼다. 신호의 `key`가 같으면 무시한다
 - **브라우저 정책:** 첫 클릭·키 입력 전에는 AudioContext를 만들지 않는다. 켜기/끄기와 크기는 `localStorage`(`rs-sound`)에 저장하고, 막혀 있어도 동작한다
 - 게임이 끝나면(사망·귀환) 모든 층이 0
+- **사건 효과음(`turn_sfx`):** 중요 알림과 같은 기록(`turn_flags`, `event`, `offer`, `status`)에서 고른다. 우선순위: 귀환·사망(단독) > 체포 > 기회 결과·판정 성공/실패 > 단서 정체(위험/발견) > 위험 이벤트 > 새 기회 > 새 단서 > 행운 > 탈것 > 표 > 이동 > 거절·만료·되풀이. 한 턴에 최대 3개
+- **한 번만 울리기:** 신호의 `sfx = {events, nonce}`. nonce(턴·경과 시간·좌표·상태)가 바뀔 때만 울리므로, 같은 턴의 화면 갱신(진행 중 표시, 그림 갱신)에는 다시 울리지 않는다. 페이지를 연 직후 처음 받은 신호는 울리지 않고, 이어하기 화면은 `view(quiet=True)`로 빈 목록을 보낸다(저장된 마지막 턴의 소리를 다시 울리지 않게)
+- **합성:** `sound.js`의 `SFX` 표(음표·노이즈 스윕·북소리). 효과음은 실내 필터를 거치지 않는 별도 경로(`sfxBus`)로 나간다. 소리를 꺼 두면 울리지 않는다
+- **다른 탭:** `visibilitychange`로 숨겨지면 AudioContext를 멈추고, 돌아오면(소리가 켜져 있으면) 다시 켠다. 숨겨진 동안 온 효과음은 울리지 않는다
