@@ -29,6 +29,7 @@ class Source extends Node { start() { calls.started++; } stop() {} }
 class AudioContext {
   constructor() { this.sampleRate = 8000; this.currentTime = 0; this.state = "suspended"; this.destination = new Node(); }
   resume() { this.state = "running"; }
+  suspend() { this.state = "suspended"; }
   createGain() { return new Gain(); }
   createBiquadFilter() { return new Filter(); }
   createOscillator() { return new Osc(); }
@@ -84,10 +85,35 @@ result.afterClick = { running: sound.running(), levels: sound.levels() };
 const before = calls.scheduled;
 for (let i = 0; i < 400; i++) intervals.forEach((fn) => fn());
 result.occasionalPlayed = calls.scheduled - before + calls.started;
-// 4) 같은 신호가 다시 와도 그대로, 소리 끄기 버튼
+// 4) 사건 효과음: nonce가 바뀌면 한 번 울리고, 같은 nonce로 다시 와도(그림 갱신 등) 다시 울리지 않는다
+const base = JSON.parse(cueJson);
+const withSfx = (nonce, events) => [{ dataset: { cue: JSON.stringify(Object.assign({}, base, { sfx: { nonce, events } })) } }];
+let mark = calls.started;
+cueNodes = withSfx("next-turn", sound.effects);
+observer();
+result.sfxPlayed = calls.started - mark;
+mark = calls.started;
+observer();
+result.sfxReplayed = calls.started - mark;
+result.effects = sound.effects;
+// 5) 다른 탭으로 가면 멈추고, 그동안 온 효과음은 울리지 않으며, 돌아오면 다시 켠다
+document.hidden = true;
+for (const fn of listeners.visibilitychange || []) fn();
+mark = calls.started;
+cueNodes = withSfx("while-hidden", ["danger"]);
+observer();
+result.hidden = { running: sound.running(), played: calls.started - mark };
+document.hidden = false;
+for (const fn of listeners.visibilitychange || []) fn();
+result.visibleAgain = sound.running();
+// 5) 같은 신호가 다시 와도 그대로, 소리 끄기 버튼
 observer();
 const button = appended[0].querySelector("button");
 button.listeners.click();
 result.muted = { on: sound.prefs.on, label: button.textContent, saved: store["rs-sound"] };
+mark = calls.started;
+cueNodes = withSfx("after-mute", ["offer", "danger"]);
+observer();
+result.sfxWhileMuted = calls.started - mark;
 result.errors = calls.errors;
 console.log(JSON.stringify(result));

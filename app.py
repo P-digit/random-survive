@@ -16,7 +16,7 @@ from survival.llm import describe_provider, missing_key_message
 from survival.gamemaster import get_client, run_turn
 from survival.state import create_game
 from survival.weather import weather_category
-from survival.sound import soundscape
+from survival.sound import soundscape, turn_sfx
 from survival.ui import (CSS, INTRO_MESSAGE, TITLE_HTML, render_hud, render_location,
                          render_notices, render_sound_cue, sound_head, turn_summary)
 
@@ -31,8 +31,11 @@ def intro_chat():
     return [{"role": "assistant", "content": INTRO_MESSAGE}]
 
 
-def view(state, chat, busy=False):
-    """화면의 모든 출력 컴포넌트 값을 한 번에 만든다. (OUTPUTS 순서와 같아야 함)"""
+def view(state, chat, busy=False, quiet=False):
+    """화면의 모든 출력 컴포넌트 값을 한 번에 만든다. (OUTPUTS 순서와 같아야 함)
+
+    quiet: 이번 턴의 효과음을 울리지 않는다 (이어하기: 저장된 마지막 턴의 소리를 다시 울리지 않게)
+    """
     playing = state is not None and state.status == "playing"
     suggestions = state.suggestions if playing else []
     buttons = []
@@ -52,7 +55,7 @@ def view(state, chat, busy=False):
     return (
         state,
         chat,
-        render_hud(state) + render_sound_cue(soundscape(state)),   # 상태창에 배경 소리 신호를 함께 싣는다
+        render_hud(state) + sound_cue(state, quiet),   # 상태창에 소리 신호를 함께 싣는다
         render_location(state),
         state.image_path if state is not None else None,
         *buttons,
@@ -60,6 +63,13 @@ def view(state, chat, busy=False):
         gr.update(value="🎲 새로 낙하" if state is not None else "🎲 낙하 시작", interactive=not busy),
         gr.update(visible=state is None and not busy and savegame.exists()),   # 이어하기 버튼
     )
+
+
+def sound_cue(state, quiet=False):
+    sfx = turn_sfx(state)
+    if quiet:
+        sfx["events"] = []      # nonce는 그대로 보내, 브라우저가 이 턴은 이미 지나간 것으로 안다
+    return render_sound_cue(dict(soundscape(state), sfx=sfx))
 
 
 def scene_key(state):
@@ -142,10 +152,10 @@ def resume_game(use_image):
     notice = {"role": "assistant",
               "content": f"*💾 저장된 게임을 불러왔습니다 — {state.day}일차 {state.hour:02d}:00, {state.place_name}*"}
     redraw = use_image and needs_new_image(state)
-    yield view(state, state.chat + [notice], busy=redraw)
+    yield view(state, state.chat + [notice], busy=redraw, quiet=True)
     if redraw:
         draw_scene(state)
-        yield view(state, state.chat + [notice])
+        yield view(state, state.chat + [notice], quiet=True)
 
 
 def play(message, state, use_image):
