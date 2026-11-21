@@ -484,6 +484,10 @@ def execute_tool(state, name, arguments, client=None):
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
             result = {"error": "이번 턴의 시간은 이미 반영되었다. 추가로 시간을 흘리지 말고 결과를 서술하라."}
+        elif name in ("attempt_action", "arrest") and (state.turn_flags.get("police") or {}).get("phase") == "resolved":
+            result = {"error": "경찰에 대한 대응은 엔진이 이미 판정했다(GM 입력의 [경찰 대응 결과]). 그 결과를 서술하라."}
+        elif name == "arrest" and state.pursuit:
+            result = {"error": "경찰이 막 나타났다. 체포 여부는 플레이어의 다음 행동을 보고 엔진이 정한다. 압박하는 장면에서 멈춰라."}
         elif name == "attempt_action":
             result = state.attempt(args.get("action", ""), args.get("difficulty", "normal"),
                                    str(args.get("crime", "none")), str(args.get("witnessed", "none")),
