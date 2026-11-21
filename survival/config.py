@@ -77,7 +77,17 @@ LAND_METHODS = {"walk", "hitchhike", "bus", "train"}
 
 # --- 자유 행동 (시도 판정) ---
 # 난이도별 기본 성공 확률. 상태·소지품·상황에 따라 엔진이 보정한다.
-ATTEMPT_CHANCE = {"easy": 0.85, "normal": 0.60, "hard": 0.35, "very_hard": 0.15}
+# 연출 방식: cinematic(기본, 영화처럼 극적인 성공이 잦다) / realistic(현실 기준)
+PLAY_STYLE = "realistic" if os.getenv("PLAY_STYLE", "").strip().lower() == "realistic" else "cinematic"
+ATTEMPT_CHANCES = {
+    "realistic": {"easy": 0.85, "normal": 0.60, "hard": 0.35, "very_hard": 0.15},
+    "cinematic": {"easy": 0.90, "normal": 0.70, "hard": 0.45, "very_hard": 0.25},
+}
+ATTEMPT_CHANCE = ATTEMPT_CHANCES[PLAY_STYLE]
+# 극적인 성공: 성공한 판정 중 이 비율은 '영화 같은 성공'(목격돼도 수배되지 않음, 걸어 둔 돈 1.5배)
+CRITICAL_CHANCE = {"realistic": 0.0, "cinematic": 0.15}[PLAY_STYLE]
+# 가까스로 모면: 폭력적인 시도에 실패해도 이 비율은 피해가 절반
+CLOSE_CALL_CHANCE = {"realistic": 0.0, "cinematic": 0.30}[PLAY_STYLE]
 # 실패했을 때 몸싸움 등으로 입는 피해(체력)
 ATTEMPT_FAIL_DAMAGE = {"easy": 5, "normal": 12, "hard": 20, "very_hard": 30}
 

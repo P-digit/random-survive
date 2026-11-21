@@ -3,9 +3,6 @@ import html
 import json
 
 from survival import sound, ui
-from tests import test_engine
-
-game = test_engine.game   # 게임 상태 픽스처 재사용 (몽골, 온대림, 1일차 12시, 맑음)
 
 
 def layers(state):
@@ -229,3 +226,9 @@ def test_resume_view_sends_the_turn_without_effects(game, monkeypatch):
     assert payload(loud)["sfx"]["events"] == ["success"]
     assert payload(quiet)["sfx"] == {"events": [], "nonce": payload(loud)["sfx"]["nonce"]}
     assert payload(quiet)["layers"] == payload(loud)["layers"]
+
+
+def test_critical_success_sparkles(game):
+    game.turn_flags = {"attempt": {"success": True, "critical": True}}
+    assert sfx(game) == ["success", "lucky"]
+

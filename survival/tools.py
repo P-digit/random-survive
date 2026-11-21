@@ -285,6 +285,36 @@ TOOLS = [
         {},
     ),
     _function(
+        "work",
+        "플레이어가 일을 해서 돈을 번다(마을·도시). 시급·번 돈·시간은 엔진이 정한다. 일해서 번 돈은 반드시 이 툴로 "
+        "처리한다(update_status 로 주지 않는다). 일할수록 그 일의 기술이 올라 시급이 오른다.",
+        {
+            "job": {"type": "string", "enum": ["labor", "service", "skilled", "street"],
+                    "description": "labor 막노동(짐·공사·농사·하역), service 서비스(식당·가게·청소), skilled 기술직(수리·"
+                                   "운전·통역·장부), street 길거리 일(공연·구두닦이·짐꾼·길 안내, 밤에도 가능)"},
+            "hours": {"type": "number", "description": "일하는 시간 (1~10)"},
+        },
+    ),
+    _function(
+        "sell_item",
+        "소지품을 판다(마을·도시). 값은 엔진의 시세로 정해진다. 물건을 팔아 번 돈은 반드시 이 툴로 처리한다.",
+        {"item": {"type": "string", "description": "팔 소지품 이름"}},
+    ),
+    _function(
+        "rent_room",
+        "숙소에 방을 빌린다(마을 1박 $8, 도시 $20). 장면이 그 방 안으로 바뀐다. 빌린 방은 은신처가 되어 숨어 지내면 "
+        "수배도가 빨리 내려가고 경찰이 잘 찾아오지 않는다.",
+        {"nights": {"type": "integer", "description": "묵을 밤 수 (1~7)"}},
+    ),
+    _function(
+        "gamble",
+        "판돈을 걸고 도박을 한다(마을·도시의 카드·주사위·내기). 승패와 딴 돈은 엔진이 정한다.",
+        {
+            "stake": {"type": "number", "description": "판돈 (USD, 최대 200)"},
+            "game": {"type": "string", "description": "도박 종류 (예: 카드, 주사위, 닭싸움 내기)"},
+        },
+    ),
+    _function(
         "search_survival_guide",
         "생존 지식 문서에서 관련 내용을 검색한다. 플레이어가 생존 방법을 묻거나, 위험한 상황"
         "(저체온증, 뱀, 탈수, 고산병, 여권 분실 등)의 올바른 대처가 결과에 영향을 줄 때 호출한다.",
@@ -357,6 +387,10 @@ def gain_problem(state, source, giver=""):
                 "훔친 것으로 처리하지 마라.")
     if source == "bought" and not state.turn_flags.get("paid"):
         return "산 물건은 같은 턴에 pay 로 값을 먼저 내야 얻는다."
+    if source == "work":
+        return "일해서 번 돈은 work 툴로 처리한다(시급과 번 돈은 엔진이 정한다). update_status 로 주지 마라."
+    if source == "sold":
+        return "물건을 판 돈은 sell_item 툴로 처리한다(값은 엔진의 시세로 정한다)."
     if source in ("gift", "reward") and giver:
         person = state.find_character(giver)
         enemy = next((e for e in state.enemies_nearby() if e["name"] == (person or {}).get("name", giver)), None)
@@ -484,6 +518,10 @@ def execute_tool(state, name, arguments, client=None):
                                "지금까지의 결과만 서술하고 플레이어의 다음 지시를 기다려라."}
         elif name == "advance_time" and state.turn_flags.get("time", 0) >= 1:
             result = {"error": "이번 턴의 시간은 이미 반영되었다. 추가로 시간을 흘리지 말고 결과를 서술하라."}
+        elif name in ("attempt_action", "arrest") and (state.turn_flags.get("police") or {}).get("phase") == "resolved":
+            result = {"error": "경찰에 대한 대응은 엔진이 이미 판정했다(GM 입력의 [경찰 대응 결과]). 그 결과를 서술하라."}
+        elif name == "arrest" and state.pursuit:
+            result = {"error": "경찰이 막 나타났다. 체포 여부는 플레이어의 다음 행동을 보고 엔진이 정한다. 압박하는 장면에서 멈춰라."}
         elif name == "attempt_action":
             result = state.attempt(args.get("action", ""), args.get("difficulty", "normal"),
                                    str(args.get("crime", "none")), str(args.get("witnessed", "none")),
@@ -508,6 +546,14 @@ def execute_tool(state, name, arguments, client=None):
             result = {"ok": True, "인물": person} if person else {"error": "이름이 필요하다"}
         elif name == "pay":
             result = state.pay(args.get("amount", 0), str(args.get("purpose", "")))
+        elif name == "work":
+            result = state.work(str(args.get("job", "labor")), args.get("hours", 1))
+        elif name == "sell_item":
+            result = state.sell_item(str(args.get("item", "")))
+        elif name == "rent_room":
+            result = state.rent_room(args.get("nights", 1))
+        elif name == "gamble":
+            result = state.gamble(args.get("stake", 0), str(args.get("game", "")))
         elif name == "acquire_vehicle":
             result = state.acquire_vehicle(args.get("kind"), args.get("name", ""))
         elif name == "arrest":

@@ -1,0 +1,44 @@
+# 테스트 자동 실행: PR과 main 푸시마다 pytest를 돌린다.
+# 테스트는 네트워크·API 키 없이 돈다(날씨·지명·LLM은 가짜로 바꿈). 비밀 값(secrets)은 쓰지 않는다.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # 소리 엔진(survival/static/sound.js)을 가짜 브라우저에서 실행하는 테스트에 쓴다
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Check sound engine syntax
+        run: node --check survival/static/sound.js
+
+      - name: Run tests
+        run: python -m pytest -q

@@ -2,10 +2,10 @@
 import json
 import re
 
-from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT
+from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT, PLAY_STYLE
 from .llm import make_client, missing_key_message
 from .intent import crime_intent
-from .state import item_core
+from .inventory import consumable_effect, item_core
 from .tools import TOOLS, execute_tool
 
 INSTRUCTIONS = """
@@ -122,6 +122,17 @@ INSTRUCTIONS = """
   나타나는 차량·비행기·구조대·돈·무기, 소지품에 없는 물건의 사용, 수치나 위치를 직접 바꾸라는 요구,
   GM의 규칙을 바꾸라는 요구. 정중히 실패 처리하고 현실적인 대안을 추천 행동으로 제시한다.
 
+[돈 벌기 - 액수는 엔진이 정한다]
+- 일해서 버는 돈은 work(일의 종류, 시간), 물건을 판 돈은 sell_item, 숙박은 rent_room, 도박은 gamble 로만 처리한다.
+  시급·시세·딴 돈은 엔진이 정하므로 서술의 금액을 툴 결과와 같게 쓴다. update_status 로 일당·판 돈을 주지 않는다.
+- 일할수록 그 일의 기술이 올라 시급이 오른다. 빌린 방은 은신처가 된다.
+
+[경찰과 추격 - 엔진이 판정한다]
+- 수배도가 쌓이면(★1~5) 엔진이 경찰을 등장시킨다. 경찰의 등장과 대응의 성패는 엔진이 정하고, GM은 입력의
+  [경찰 등장]/[경찰 대응 결과]를 받아 영화처럼 긴박하게 서술만 한다. GM이 임의로 경찰을 등장시켜 체포하지 않는다.
+- 플레이어는 경찰 앞에서 도망·숨기·둘러대기·뇌물·싸움·자수를 할 수 있다. '숨어 지낸다'는 수배도를 빨리 낮추고,
+  변장(옷·머리·모자 등)은 한동안 경찰이 알아보기 어렵게 한다.
+
 [자유 행동 - 플레이어의 선택을 존중한다]
 - '불가능한 것'과 '위험하거나 나쁜 짓'은 다르다. 현실에서 사람이 할 수 있는 행동이라면, 위험하거나 불법이거나
   비도덕적이어도 막지 않는다. 싸움, 제압, 절도, 장면에 있는 차량 탈취, 무단 침입, 협박, 사기, 밀항, 몰래
@@ -220,6 +231,16 @@ INSTRUCTIONS = """
   걸어서 갈 수 없다. 걷기를 추천할 때는 "연기가 나는 쪽으로 걷는다", "강을 따라 하류로 내려간다"처럼
   눈앞의 구체적인 목표(물, 마을, 도로, 피난처)를 향한 것만 적는다.
 """
+
+CINEMATIC_NOTE = """
+[연출 - 영화처럼]
+- 이 게임은 액션 영화처럼 연출한다. 마법·SF·초능력은 여전히 불가능하지만, 사람이 해낼 수 있는 일은 극적으로
+  성공할 수 있다(지붕 위 추격, 아슬아슬한 탈출, 통쾌한 한 방, 위기의 순간의 기지).
+- 판정 결과에 '극적인 성공'이 있으면 영화의 명장면처럼 화려하고 통쾌하게, '가까스로 모면'이면 간발의 차로
+  피한 긴장감 있게 서술한다. 연출은 과장해도 엔진이 정한 결과(성패·피해·돈·수배도)는 바꾸지 않는다.
+"""
+if PLAY_STYLE == "cinematic":
+    INSTRUCTIONS += CINEMATIC_NOTE
 
 DEFAULT_SUGGESTIONS = ["주변을 살펴본다", "물과 식량을 찾는다", "사람의 흔적을 찾는다"]
 
@@ -329,6 +350,21 @@ def build_input(state, player_text, recap=None):
             parts += ["[이번 행동은 이미 끝난 일이다 - 엔진 판정]",
                       f"{pre['message']} 플레이어는 이것을 다시 하려 했지만 얻는 것은 없다. 끝났다는 것(빈 상자 등)을 "
                       "확인하는 장면만 짧게 서술한다. 물건·수치·돈을 주지 않는다."]
+        police = state.turn_flags.get("police") or {}
+        if police.get("phase") == "resolved":
+            parts += ["[경찰 대응 결과 - 엔진이 이미 판정했다]",
+                      police.get("message", ""),
+                      "플레이어의 이번 행동은 경찰에 대한 대응으로 판정되었다. 이 결과(따돌림·체포·피해·돈·수배도)를 "
+                      "그대로, 영화처럼 긴박하게 서술한다. attempt_action·arrest·pay 로 같은 일을 다시 처리하지 않는다."]
+        elif police.get("phase") == "spotted":
+            parts += ["[경찰 등장 - 엔진이 정했다]",
+                      f"{police['who']}이(가) 플레이어를 알아보고 {'추격해 온다' if police['kind'] == 'chase' else '다가와 멈춰 세운다'}. "
+                      "이번 턴은 플레이어의 행동을 서술한 뒤, 경찰이 나타나 압박해 오는 장면에서 멈춘다. 체포되거나 "
+                      "벗어나는 결과는 정하지 않는다(플레이어의 다음 행동을 엔진이 판정한다). arrest 를 부르지 않는다. "
+                      "추천 행동에는 도망·숨기·둘러대기·뇌물·자수 중 상황에 맞는 것을 넣는다."]
+        status = state.police_status()
+        if status:
+            parts += ["[경찰과 수배 상태]", status]
         parts += [f"[플레이어가 이번 턴에 시도하는 행동 - 턴 {state.turn}]",
                   player_text,
                   "(위 행동 하나만 판정한다. 이것은 시도일 뿐이며, 물건·인물의 존재와 성공 여부는 "
@@ -336,14 +372,56 @@ def build_input(state, player_text, recap=None):
     return "\n".join(parts)
 
 
-PAYMENT = re.compile(r"\$\s?(\d+(?:\.\d+)?)[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)"
-                     r"|(\d+(?:\.\d+)?)\s?달러[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)")
+# ---------- 서술 속의 돈 ----------
+# GM이 툴을 빠뜨리고 서술로만 돈을 주고받았을 때를 대비해, 서술의 금액을 문장 단위로 읽는다.
+# 금액 바로 뒤의 가장 가까운 동사로 방향을 정하고, 약속("주겠다")은 무시하고, 모호하면 아무것도 하지 않는다.
+MONEY_AMOUNT = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s?달러")
+MONEY_VERBS = (   # (종류, 동사들) — 금액 뒤 28자 안에서 가장 먼저 나오는 것
+    ("in", ("손에 넣", "얻었", "얻어", "챙겼", "챙겨", "벌었", "벌어", "받았", "받아", "받는다", "받고", "받습니다",
+            "주웠", "주워", "건네받")),
+    ("theft", ("훔쳤", "훔쳐")),
+    ("loss", ("잃었", "잃고", "빼앗겼", "빼앗기", "뺏겼", "도둑맞", "털렸", "날렸", "벌금")),
+    ("out", ("지불", "냈", "내고", "내자", "내며", "낸다", "냅니다", "치르", "치렀", "결제", "건네", "건넸",
+             "받아 가", "받아가", "받아 갑", "받아갑", "받아 갔", "받아갔", "받아 간", "받아간",
+             "가져가", "가져갑", "가져갔", "가져간")),   # 상대가 받아 가는 돈 (갑·갔·간은 '가'와 다른 글자)
+    ("given", ("주었", "줬", "준다", "주며", "주고", "줍니다")),
+)
+# 받는 쪽이 플레이어라는 표시 (누가 '건네주는' 돈인지 가린다)
+TO_PLAYER = re.compile(r"당신에게|당신 손에|손에 쥐여|수고비|품삯|일당|보수|사례금|사례로|여비|용돈|대가로|급여|월급|팁으로")
+TO_SOMEONE = re.compile(r"[가-힣]+에게")
+PROMISE = re.compile(r"겠|기로|준다고|주마|줄게|수 있|려고|려 한")
 
 
-INCOME = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)[^\n.]{0,25}?(손에 넣|얻었|얻어|챙겼|챙겨|벌었|벌어|받았|받아|훔쳤|훔쳐|주웠|주워)"
-                    r"|(\d[\d,]*)\s?달러[^\n.]{0,25}?(손에 넣|얻었|얻어|챙겼|챙겨|벌었|벌어|받았|받아|훔쳤|훔쳐|주웠|주워)")
-LOSS = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)[^\n.]{0,25}?(잃었|잃고|빼앗겼|빼앗기|뺏겼|도둑맞|털렸|날렸|벌금)"
-                  r"|(\d[\d,]*)\s?달러[^\n.]{0,25}?(잃었|잃고|빼앗겼|빼앗기|뺏겼|도둑맞|털렸|날렸|벌금)")
+def money_mentions(text):
+    """서술에 나온 돈: [(금액, 종류)]. 종류는 in(받음) / out(냄) / loss(잃음) / theft(훔침) / promise(약속) / unknown."""
+    found = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
+        for match in MONEY_AMOUNT.finditer(sentence):
+            amount = float((match.group(1) or match.group(2)).replace(",", ""))
+            before, after = sentence[:match.start()], sentence[match.end():match.end() + 28]
+            hits = [(after.find(verb), kind, verb) for kind, verbs in MONEY_VERBS for verb in verbs if verb in after]
+            if not hits:
+                found.append((amount, "unknown"))
+                continue
+            position, _, kind, verb = min((pos, -len(verb), kind, verb) for pos, kind, verb in hits)   # 같은 자리면 긴 말
+            between = after[:position]                # 금액과 동사 사이 ("$15를 수고비로 건넸다")
+            if PROMISE.search(after[position + len(verb):position + len(verb) + 8]):
+                kind = "promise"                    # "$70을 챙겨 주겠다" — 아직 오가지 않은 돈
+            elif verb in ("건네", "건넸"):
+                # "수고비로 10달러를 건네줍니다"(받음) / "주인에게 $12를 건네고"(냄)
+                if TO_PLAYER.search(before) or TO_PLAYER.search(between):
+                    kind = "in"
+                elif not TO_SOMEONE.search(before) and "당신은" not in before and "당신이" not in before:
+                    kind = "unknown"
+            elif kind == "given":
+                kind = "in" if TO_PLAYER.search(before) or TO_PLAYER.search(between) else "unknown"
+            found.append((amount, kind))
+    return found
+
+
+def mentioned_amount(text, amount):
+    """서술에 그 금액이 나오는가 ($50, 50달러, 50 달러)."""
+    return any(abs(value - abs(amount)) < 0.5 for value, _ in money_mentions(text))
 
 
 def auto_money(state, narration):
@@ -351,19 +429,17 @@ def auto_money(state, narration):
     if state.money != state._snapshot.get("money", state.money) or state.turn_flags.get("paid") \
             or state.turn_flags.get("earned"):
         return 0.0
-    text = narration or ""
-    loss = LOSS.search(text)
-    if loss:
-        amount = min(float((loss.group(1) or loss.group(3)).replace(",", "")), state.money)
+    mentions = money_mentions(narration)
+    loss = next((amount for amount, kind in mentions if kind == "loss"), None)
+    if loss is not None:
+        amount = min(loss, state.money)
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
         return -amount
-    gain = INCOME.search(text)
-    if gain and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none" \
-            and gain.group(2 if gain.group(1) else 4) in ("훔쳤", "훔쳐"):
-        gain = None                       # 범죄 의도가 없는 턴에 '훔친 돈'은 들어오지 않는다
-    if gain:
-        amount = min(float((gain.group(1) or gain.group(3)).replace(",", "")), MONEY_GAIN_LIMIT)
+    gains = [amount for amount, kind in mentions
+             if kind == "in" or (kind == "theft" and state.turn_flags.get("crime_intent", ("explicit", ""))[0] != "none")]
+    if gains:                             # 범죄 의도가 없는 턴에 '훔친 돈'은 들어오지 않는다
+        amount = min(gains[0], MONEY_GAIN_LIMIT)
         state.money = round(state.money + amount, 2)
         state.turn_flags["earned"] = amount
         return amount
@@ -374,14 +450,28 @@ def auto_charge(state, narration):
     """게임 마스터가 '돈을 냈다'고 서술했는데 이번 턴에 돈이 전혀 줄지 않았다면, 서술된 금액만큼 차감한다."""
     if state.money < state._snapshot.get("money", state.money) or state.turn_flags.get("paid"):
         return 0.0
-    match = PAYMENT.search(narration or "")
-    if not match:
+    amount = next((amount for amount, kind in money_mentions(narration) if kind == "out"), None)
+    if amount is None:
         return 0.0
-    amount = min(float(match.group(1) or match.group(3)), state.money)
+    amount = min(amount, state.money)
     if amount > 0:
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
     return amount
+
+
+def money_notices(state, narration):
+    """GM 툴로 돈이 움직였는데 서술에는 그 금액이 없으면 알림으로 알려 준다(플레이어가 이유 없이 돈이 바뀐 것을 보지 않게)."""
+    notices = []
+    for entry in state.turn_flags.get("money_log") or []:
+        amount = entry["amount"]
+        if abs(amount) < 0.5 or entry.get("shown") or mentioned_amount(narration, amount):
+            continue
+        spent = amount < 0
+        notices.append({"kind": "info",
+                        "title": f"{'💸 지출' if spent else '💵 수입'} {'-' if spent else '+'}${abs(amount):,.0f} — {entry['why']}",
+                        "text": f"서술에 빠진 돈 변화를 엔진이 반영했습니다. 남은 돈 ${state.money:,.0f}"})
+    return notices
 
 
 # 한글·영문·숫자·문장부호가 아닌 문자(데바나가리, 아랍, 키릴, 태국, 한자·가나 등)
@@ -577,7 +667,8 @@ def collect_notices(state):
         notices.append({"kind": "info", "title": f"⌛ 기회가 지나갔다 — {expired['accept']}", "text": expired["exit"]})
     attempt = flags.get("attempt")
     if attempt:
-        verdict = "성공" if attempt["success"] else "실패"
+        verdict = ("극적인 성공" if attempt.get("critical") else "성공") if attempt["success"] else \
+            ("실패 · 가까스로 모면" if attempt.get("close_call") else "실패")
         notices.append({"kind": "good" if attempt["success"] else "bad",
                         "title": f"🎲 {attempt['action']} — {verdict} (성공 확률 {attempt['chance'] * 100:.0f}%)",
                         "text": " · ".join(attempt["effects"]) or "추가 피해 없음"})
@@ -589,7 +680,8 @@ def collect_notices(state):
     arrested = flags.get("arrested")
     if arrested:
         notices.append({"kind": "bad", "title": f"🚔 체포 — {arrested['where']}",
-                        "text": f"하루 구금, 벌금 ${arrested['fine']:.0f}"
+                        "text": f"{'하루' if arrested.get('hours', 24) >= 24 else str(arrested['hours']) + '시간'} 구금, "
+                                f"벌금 ${arrested['fine']:.0f}"
                                 + (f", 압수: {', '.join(arrested['lost'])}" if arrested["lost"] else "")})
     found = flags.get("lead_result")
     if found:
@@ -609,6 +701,34 @@ def collect_notices(state):
         notices.append({"kind": "good" if bought.get("sponsored") else "info",
                         "title": f"🎫 {'귀국 항공권 확보' if bought.get('sponsored') else '예약 완료'} — {bought['item']}",
                         "text": paid + " 표는 탈 때까지 유지됩니다."})
+    economy = flags.get("economy") or {}
+    if economy.get("kind") == "work":
+        notices.append({"kind": "good", "title": f"💼 일 — {economy['job']} {economy['hours']:g}시간, +${economy['amount']:,.0f}",
+                        "text": f"{economy['job']} 기술 Lv{economy['level']}" + (" ⬆ 레벨 업! 시급이 오릅니다" if economy["leveled"] else "")})
+    elif economy.get("kind") == "sell":
+        notices.append({"kind": "info", "title": f"💰 판매 — {economy['item']} +${economy['amount']:,.0f}",
+                        "text": "장물이라 헐값에 넘겼습니다." if economy["stolen"] else f"남은 돈 ${state.money:,.0f}"})
+    elif economy.get("kind") == "room":
+        notices.append({"kind": "info", "title": f"🛏 숙소 — {economy['nights']}박 ${-economy['amount']:,.0f}",
+                        "text": "빌린 방은 은신처입니다. 이 방에서 숨어 지내면 수배도가 빨리 내려가고 경찰이 잘 찾아오지 않습니다."})
+    elif economy.get("kind") == "gamble":
+        won = economy["amount"] > 0
+        notices.append({"kind": "good" if won else "bad",
+                        "title": f"🎲 도박 — {'잭팟! ' if economy['jackpot'] else ''}{'+' if won else '-'}${abs(economy['amount']):,.0f}",
+                        "text": f"판돈 ${economy['stake']:,.0f} · 남은 돈 ${state.money:,.0f}"})
+    police = flags.get("police") or {}
+    if police.get("phase") == "spotted":
+        notices.append({"kind": "danger",
+                        "title": f"🚔 경찰 — {police['who']} ({'추격' if police['kind'] == 'chase' else '검문'}, "
+                                 f"수배 {'★' * police['stage']})",
+                        "text": "다음 행동으로 대응하세요: 도망친다 · 숨는다 · 둘러댄다 · 뇌물을 건넨다 · 자수한다 · 싸운다. "
+                                "다른 일을 하면 대부분 붙잡힙니다."})
+    elif police.get("phase") == "resolved" and police["outcome"] != "arrested":
+        label = {"flee": "도주", "hide": "숨기", "bribe": "뇌물", "bluff": "둘러대기", "fight": "싸움",
+                 "ignore": "무시"}.get(police["action"], police["action"])
+        chance = f" (성공 확률 {police['chance'] * 100:.0f}%)" if police.get("chance") is not None else ""
+        notices.append({"kind": "good", "title": f"🏃 경찰에게서 벗어났다 — {label}{chance}",
+                        "text": " · ".join(police["effects"]) + f" · 남은 수배도 {state.wanted:.0f}"})
     moved = flags.get("moved")
     if moved and state.status == "playing":
         cost = f" · 요금 ${moved['cost']:.0f}" if moved["cost"] else ""
@@ -628,6 +748,23 @@ def collect_notices(state):
                         "text": f"{o['text']}\n▲ 잘 풀리면: {o['detail']}\n⚠ {o.get('risk', '')}\n"
                                 f"다음 턴까지만 유효 → “{o['accept']}”"})
     return notices
+
+
+def resolve_police(state, player_text):
+    """GM을 부르기 전에 엔진이 경찰에 대한 대응을 판정한다. 경찰이 지난 턴에 나타났으면 이번 입력이 그 대응이다.
+
+    경찰이 없으면: '숨어 지낸다'(수배도가 빨리 내려감)와 '변장'을 입력에서 알아본다.
+    """
+    from .police import DISGUISE_WORDS, LAY_LOW_WORDS, classify_response, mentions
+    if not player_text:
+        return None
+    if state.pursuit and state.pursuit["turn"] < state.turn:
+        return state.respond_to_police(classify_response(player_text))
+    if state.wanted >= 1 and mentions(player_text, LAY_LOW_WORDS):
+        state.turn_flags["laying_low"] = True
+    if mentions(player_text, DISGUISE_WORDS):
+        state.put_on_disguise(player_text)
+    return None
 
 
 def resolve_offer_action(state):
@@ -676,6 +813,10 @@ def auto_decline(state, player_text):
 
 
 DRINK_VERBS = ("마신", "마셔", "마시", "들이켜", "들이킨", "목을 축")
+# 소지품이 아닌 바깥의 물. 입력이 이것을 가리키면 가진 물을 대신 마신 것으로 보지 않는다
+# ("개울을 찾아 물을 마신다"에서 개울을 못 찾았는데 가진 물 1L가 사라지던 문제)
+ENV_WATER = ("개울", "강물", "강가", "강에서", "냇물", "시냇", "계곡", "샘", "우물", "빗물", "호수", "폭포", "웅덩이",
+             "오아시스", "이슬", "눈을 녹", "눈을녹", "얼음을 녹", "얼음을녹", "수도")
 EAT_VERBS = ("먹는", "먹어", "먹고", "먹자", "먹었", "먹을", "씹어", "씹는", "삼킨", "삼켜", "베어 문")
 
 
@@ -684,7 +825,6 @@ def auto_eat(state, player_text):
 
     GM이 소지품에서 지우기만 한 경우에도(먹은 것 칸이 아니라) 먹은 것으로 기록해 회복을 보장한다.
     """
-    from .state import consumable_effect
     text = (player_text or "").replace(" ", "")
     wants = []
     if any(v.replace(" ", "") in text for v in DRINK_VERBS):
@@ -711,7 +851,11 @@ def auto_eat(state, player_text):
                 continue                 # GM이 소지품이 아닌 것(강물 등)으로 회복을 줬다
             # 2) 아무것도 처리하지 않았다: 입력에 나온 소지품(없으면 그 종류의 첫 소지품)을 먹은 것으로
             candidates = [i for i in state.items if (consumable_effect(i) or ("", 0))[0] == stat]
-            named = [i for i in candidates if len(item_core(i)) >= 1 and item_core(i) in text]
+            named = sorted((i for i in candidates if len(item_core(i)) >= 1 and item_core(i) in text),
+                           key=lambda i: -len(item_core(i)))   # "샘물을 마신다" → '물 1L'보다 '샘물 1병'
+            outside = [w.replace(" ", "") for w in ENV_WATER if w.replace(" ", "") in text]
+            if stat == "hydration" and outside and not any(w in i.replace(" ", "") for i in candidates for w in outside):
+                continue                 # 바깥의 물을 마시려 했다: 찾았는지는 GM이 정한다. 가진 물은 그대로
             pick = (named or ([] if stat == "satiety" else candidates))[:1]
             if pick and state.consume_item(pick[0]):
                 done.append(pick[0])
@@ -794,6 +938,7 @@ def run_turn(state, player_text=None):
     if player_text is None:
         state.event = None   # 시작 턴에는 돌발 이벤트 없음
     resolve_offer_action(state)
+    resolve_police(state, player_text)
     def first_call(previous_id, recap=None):
         return client.responses.create(
             model=LLM_MODEL,
@@ -851,7 +996,7 @@ def run_turn(state, player_text=None):
         # LLM이 시간을 흘리지 않았다면 플레이어 입력으로 추정해서 반영한다
         state.end_turn(*estimate_time(player_text))
 
-    state.notices = collect_notices(state)
+    state.notices = collect_notices(state) + money_notices(state, response.output_text)
     # 지명(현지 문자일 수 있음)은 그대로 두고, 서술에 섞인 다른 언어만 고친다
     text = ensure_korean(client, response.output_text or "", allowed=(state.place_name, state.scene_place))
     text = ensure_scene(client, text, state)
@@ -864,6 +1009,9 @@ def run_turn(state, player_text=None):
         state.suggestions = clean_suggestions(suggestions) if len(suggestions) == 3 else list(DEFAULT_SUGGESTIONS)
         if state.offer:      # 기회가 살아 있으면 첫 번째 버튼은 항상 '받아들이기'
             state.suggestions[0] = state.offer["accept"]
+        if state.pursuit and state.pursuit["turn"] == state.turn:   # 경찰이 막 나타났다: 버튼은 대응 선택지
+            from .police import police_suggestions
+            state.suggestions = police_suggestions(state)
     else:
         state.suggestions = []
     return body

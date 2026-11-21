@@ -125,14 +125,19 @@ def turn_sfx(state):
 
     flags = state.turn_flags or {}
     events = []
-    if flags.get("arrested"):
-        events.append("arrest")
+    police = flags.get("police") or {}
+    if flags.get("arrested") or police.get("phase") == "spotted":
+        events.append("arrest")                    # 사이렌: 경찰 등장 또는 체포
+    if police.get("phase") == "resolved" and police.get("outcome") != "arrested":
+        events.append("success")                   # 경찰을 따돌림
     result = flags.get("offer_result")
     if result:
         events.append("fail" if result.get("bad") else "success")
     attempt = flags.get("attempt")
     if attempt:
         events.append("success" if attempt.get("success") else "fail")
+        if attempt.get("critical"):
+            events.append("lucky")                 # 극적인 성공: 반짝이는 소리를 덧붙인다
     found = flags.get("lead_result")
     if found:
         events.append("danger" if found.get("danger") else "discover")
@@ -145,6 +150,11 @@ def turn_sfx(state):
         events.append("clue")
     if event.get("kind") == "lucky":
         events.append("lucky")
+    economy = flags.get("economy") or {}
+    if economy.get("kind") == "gamble":
+        events += ["lucky"] if economy.get("jackpot") else (["success"] if economy["amount"] > 0 else ["fail"])
+    elif economy.get("kind") in ("work", "sell"):
+        events.append("ticket")                    # 딩동: 돈이 들어왔다
     if flags.get("vehicle") and state.vehicle:
         events.append("engine")
     if flags.get("ticket"):
