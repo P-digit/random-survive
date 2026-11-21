@@ -8,6 +8,7 @@ from . import geo, leads as leads_api
 from .config import (DIURNAL_AMPLITUDE, EARLY_GAME_HOURS, MAJOR_EVENT_CHANCE, MAJOR_EVENT_PITY_TURNS, MONEY_GAIN_LIMIT,
                      START_ITEMS, START_MONEY, VITALS_DRAIN, WANTED_AIRPORT_LIMIT, WANTED_DECAY_PER_HOUR)
 from .crime import CrimeMixin
+from .economy import EconomyMixin
 from .events import BIOME_HAZARDS, BIOMES, PERSISTENT_OFFERS, classify_biome, roll_event, roll_major_event
 from .flags import PlaceFlags, TurnFlags
 from .inventory import InventoryMixin
@@ -21,7 +22,7 @@ from .weather import get_weather, weather_category
 
 
 @dataclass
-class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixin, PoliceMixin):
+class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixin, PoliceMixin, EconomyMixin):
     lat: float
     lon: float
     place_name: str
@@ -94,6 +95,9 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
     wanted: float = 0.0               # 수배도 0~100 (★단계는 police.heat_stage)
     pursuit: dict | None = None       # 지금 마주친 경찰 {stage, turn, who, kind: check/chase} — 다음 턴 입력으로 판정
     disguise: dict = field(default_factory=dict)   # 변장 {until(경과 시간), how}
+    skills: dict = field(default_factory=dict)     # 일의 기술 레벨 {labor/service/skilled/street: 0~5}
+    work_hours: dict = field(default_factory=dict) # 일한 시간 (기술 경험)
+    lodging: dict = field(default_factory=dict)    # 빌린 방 {lat, lon, place, until, nights} — 은신처
     _snapshot: dict = field(default_factory=dict)
 
     # ---------- 시간 ----------
@@ -557,6 +561,9 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
                                if self.journey else "없음"),
             "예약한_교통편": [f"{t['item']} (결제 완료, 탑승 대기 중)" for t in self.tickets] or "없음",
             "현재장면": f"{'실내' if self.indoor else '야외'}" + (f" - {self.scene_place}" if self.scene_place else ""),
+            "일의_기술": {k: f"Lv{v}" for k, v in self.skills.items() if v} or "없음",
+            "빌린_방": (f"{self.lodging['place']} ({'지금 방 안 — 은신처' if self.in_lodging else '다른 곳에 있음'})"
+                       if self.lodging and self.elapsed_hours < self.lodging.get("until", 0) else "없음"),
         }
 
 

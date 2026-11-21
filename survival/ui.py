@@ -376,6 +376,20 @@ def render_hud(state):
                      .replace("changed-tmp", "changed-down"))
         parts.append(f'<div class="card"><h4>OUTLAW</h4>{rows}</div>')
 
+    # 일의 기술 + 빌린 방
+    from .economy import JOBS
+    skills = [f"{JOBS[k][0]} Lv{v}" for k, v in state.skills.items() if v]
+    room = state.lodging if state.lodging and state.elapsed_hours < state.lodging.get("until", 0) else None
+    if skills or room:
+        rows = ""
+        if skills:
+            rows += f'<div class="weather"><span class="sub">💼 {escape(" · ".join(skills))}</span></div>'
+        if room:
+            left = (room["until"] - state.elapsed_hours) / 24
+            rows += (f'<div class="weather"><span class="sub">🛏 {escape(room["place"])}의 빌린 방 · {left:.1f}일 남음'
+                     + (' · <b>지금 은신 중</b>' if state.in_lodging else "") + "</span></div>")
+        parts.append(f'<div class="card"><h4>LIFE</h4>{rows}</div>')
+
     # 기후
     c = state.climate
     if c:

@@ -50,6 +50,7 @@ class TurnFlags(TypedDict, total=False):
     scene_changed: bool           # 장면(set_scene)이 바뀌었다
     police: dict                  # 경찰 {phase: spotted(등장)/resolved(대응 판정), who, action, outcome, chance, effects}
     laying_low: bool              # 플레이어가 숨어 지낸다 (수배도가 더 빨리 내려간다)
+    economy: dict                 # 일·판매·숙소·도박 결과 {kind: work/sell/room/gamble, amount, ...}
 
 
 class PlaceFlags(TypedDict, total=False):

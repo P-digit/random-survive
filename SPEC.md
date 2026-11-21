@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 219개)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 227개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -27,6 +27,7 @@
 | `survival/journey.py` | `JourneyMixin`: 목적지로 가기(`go_to`), 여러 턴 여정, 공관·공항, 귀국 지원 |
 | `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
 | `survival/police.py` | `PoliceMixin`: 수배 단계(★1~5), 경찰 등장(`roll_police`), 대응 판정(`respond_to_police`), 은신(`lay_low`), 변장. 입력 → 대응 종류(`classify_response`) (11장) |
+| `survival/economy.py` | `EconomyMixin`: 일(`work`, 시급·기술), 팔기(`sell_item`, 시세), 방(`rent_room`, 은신처), 도박(`gamble`) (12장) |
 | `survival/util.py` | `clamp` 등 여러 모듈이 함께 쓰는 작은 도구 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
 | `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
@@ -58,6 +59,7 @@
 - **이야기 정합성:** `leads`(단서), `facts`(확정 사실), `characters`, `scene_*`(현재 장면), `journey`(여러 턴 이동)
 - **기회:** `offer`(진행 중), `expired_offers`, `done_offers`(받아들이거나 거절해 끝난 기회. 재등장·되풀이 차단용)
 - **범죄:** `wanted`(0~100, ★단계는 `police.heat_stage`), `crime_scene`, `enemies`, `notorious`, `stolen_items`
+- **경제:** `skills`(일의 기술 Lv), `work_hours`, `lodging`(빌린 방 {lat, lon, place, until})
 - **경찰:** `pursuit`(마주친 경찰 {stage, turn, who, kind: check/chase}), `disguise`({until, how})
 - **턴 임시값:** `turn_flags`(`TurnFlags`), `delta`, `notices`, `event`. 장소의 사정은 `flags`(`PlaceFlags`). 두 dict의 키 목록과 뜻은 `survival/flags.py`에 있고, 새 키는 거기 먼저 적는다(`tests/test_flags.py`가 코드의 모든 키를 AST로 모아 대조)
 - **상태 머신:** `status` = `playing` → `won`(서울 60km 이내) | `dead`(체력 0, `death_reason`)
@@ -134,3 +136,11 @@
 - **구금:** 12시간마다 포만감·수분을 최소 60으로 채우고, 풀려날 때 최소 40 (구금 중 굶어 죽던 문제 수정)
 - **은신·변장:** 입력에 '숨어 지내' 등이 있으면 `turn_flags.laying_low` → `pass_time`에서 수배도 감소 4배. 변장(정규식 `DISGUISE_WORDS`)은 48시간, 목격된 범죄(수배도 상승)나 체포로 풀린다
 - 알림 "🚔 경찰 — … (★)", "🏃 경찰에게서 벗어났다", 효과음(등장·체포 사이렌, 따돌림 성공음), 상태창 ★ 표시와 "변장 중"·"경찰이 쫓는 중" 배지
+
+## 12. 경제 (`survival/economy.py`)
+- **원칙:** 액수는 엔진이 정한다. GM 툴 `work`(job, hours) / `sell_item`(item) / `rent_room`(nights) / `gamble`(stake, game). `update_status`로 `money_source=work`·`sold` 돈을 주면 `gain_problem`이 막는다
+- **일:** 야생 불가, 0~5시는 길거리 일만. 시급(마을/도시) labor 2/4, service 2.5/5, skilled 4/8, street 1.5/3.5 × (1 + 0.15 × 기술 Lv), 범죄자로 알려진 곳 ×0.5. 일한 시간만큼 `pass_time(work)`, 8시간마다 기술 Lv+1(최대 5)
+- **팔기:** `ITEM_VALUES` 시세 × 도시 0.8 / 마을 0.6, 장물(`stolen_items`) ×0.5, 여권·표는 불가
+- **숙소:** 1박 마을 $8 / 도시 $20(`pay`), 장면을 그 방 안으로. `in_lodging`(같은 곳·기간 안·실내)이면 경찰 등장 ×0.3, 은신(`laying_low`) 수배도 감소 6배
+- **도박:** 판돈 ≤ $200·가진 돈, 45% 승리(+판돈), cinematic이면 3% 잭팟(+5배), 1시간
+- 결과는 `turn_flags.economy` → 알림(💼 일·💰 판매·🛏 숙소·🎲 도박)과 효과음. 이 돈은 `money_log`에 `shown`으로 남아 "서술에 빠진 돈" 알림이 겹치지 않는다. 상태창 LIFE 칸(기술, 빌린 방)
