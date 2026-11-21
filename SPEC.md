@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 227개)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 239개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -23,7 +23,7 @@
 | `survival/state.py` | `GameState` 데이터클래스(모든 필드)와 공통 규칙: 시간 흐름, 생체 수치, 날씨·기후, 장면·인물, 단서와 사실, 턴 시작/종료, `create_game`. 아래 믹스인 5개를 상속한다 |
 | `survival/inventory.py` | `InventoryMixin`: 소지품 넣고 빼기, 먹고 마시기(용량·일부만 마시기), 돈 쓰기. 소지품 판정 함수(`item_core`, `consumable_effect` 등) |
 | `survival/crime.py` | `CrimeMixin`: 자유 행동 판정, 범죄 기록·목격·수배도, 원한을 가진 사람, 체포 |
-| `survival/travel.py` | `TravelMixin`: 이동 수단(`travel`), 요금·표, 탈것과 운전, 새 장소 도착(`arrival_place`) |
+| `survival/travel.py` | `TravelMixin`: 이동 수단(`travel`), 요금·표, 탈것(훔치기·사기 `buy_vehicle`·주유 `refuel`)과 운전, 국경 검문(`_border_check`), 새 장소 도착(`arrival_place`) (13장) |
 | `survival/journey.py` | `JourneyMixin`: 목적지로 가기(`go_to`), 여러 턴 여정, 공관·공항, 귀국 지원 |
 | `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
 | `survival/police.py` | `PoliceMixin`: 수배 단계(★1~5), 경찰 등장(`roll_police`), 대응 판정(`respond_to_police`), 은신(`lay_low`), 변장. 입력 → 대응 종류(`classify_response`) (11장) |
@@ -88,7 +88,7 @@
 - 시작: 물 1L, 에너지바 2개, 라이터, 다용도 칼, 여권, 스마트폰(배터리 30%), $50
 - 먹고 마시기: `CONSUMABLES` 표의 기본 회복량을 엔진이 보장(`settle_consumption`). 용량이 적힌 마실 것은 용량에 비례(`HYDRATION_PER_LITER`=45/L). "조금·한 모금·아껴·반만" 마시면 `sip_item`이 용량만 줄인다(`SIP_ML`=250ml, 반은 절반). 일부만 마신 턴에는 GM이 준 수분을 마신 양만큼으로, 용량이 적힌 물을 다 마신 턴에는 기본 회복량의 `MEASURED_DRINK_SLACK`(1.2)배로 깎는다(강물·음식처럼 용량을 모르는 것이 섞이면 GM을 따른다)
 - 판정 성공률(`PLAY_STYLE`): cinematic(기본) easy 0.90 / normal 0.70 / hard 0.45 / very_hard 0.25, realistic 0.85 / 0.60 / 0.35 / 0.15. cinematic이면 성공의 15%가 극적인 성공(`CRITICAL_CHANCE`: 목격돼도 수배도 없음, 걸어 둔 돈 1.5배), 폭력적 실패의 30%가 가까스로 모면(`CLOSE_CALL_CHANCE`: 피해 절반). GM 지시문에 `CINEMATIC_NOTE`(영화적 연출 지침)가 붙는다
-- 초반 `EARLY_GAME_HOURS`=36시간 동안은 마을까지만 이동(최대 60km)
+- 초반 `EARLY_GAME_HOURS`=12시간(36에서 완화) 동안은 마을까지만 이동(최대 60km). 공항은 공관 방문 또는 `AIRPORT_OPEN_DAY`=3일차부터(5에서 완화)
 - 이동은 두 가지다. 수단·거리를 정한 이동(`travel` 툴)은 `TRAVEL_RULES`의 최대 거리 안에서 한 턴에 끝난다. 목적지를 말한 이동(`go_to` 툴, `journey`)은 한 턴에 최대 `JOURNEY_MAX_HOURS`=10시간씩 가고, 남으면 다음 턴에 이어간다
 - 대형 이벤트 확률 0.10, 8턴 동안 없으면 확정 발생
 - 수배도 50 이상이면 공항·항구에서 붙잡힐 수 있음
@@ -144,3 +144,10 @@
 - **숙소:** 1박 마을 $8 / 도시 $20(`pay`), 장면을 그 방 안으로. `in_lodging`(같은 곳·기간 안·실내)이면 경찰 등장 ×0.3, 은신(`laying_low`) 수배도 감소 6배
 - **도박:** 판돈 ≤ $200·가진 돈, 45% 승리(+판돈), cinematic이면 3% 잭팟(+5배), 1시간
 - 결과는 `turn_flags.economy` → 알림(💼 일·💰 판매·🛏 숙소·🎲 도박)과 효과음. 이 돈은 `money_log`에 `shown`으로 남아 "서술에 빠진 돈" 알림이 겹치지 않는다. 상태창 LIFE 칸(기술, 빌린 방)
+
+## 13. 탈것 (`config.VEHICLES`, `survival/travel.py`)
+- 종류: car, truck, motorbike, boat, bicycle, animal(말·낙타), plane. 속성: speed, range(연료로 가는 거리 / 연료 없는 탈것은 한 턴 최대 거리), sea, fuel, price, fuel_cost(km당), sold_in
+- 얻기: `acquire_vehicle`(같은 턴 판정 성공, 연료 40~90%) 또는 `buy_vehicle`(정가, `pay`, 연료 가득). 탈것은 하나만(새로 얻으면 타던 것은 두고 감)
+- 운전(`travel(method='drive')`): 연료 소모(연료 없는 탈것은 그대로), 자전거는 `walk` 활동(기력 소모). 연료가 떨어지면 **탈것은 남고** range 0으로 멈춘다. `refuel`: 마을·도시(경비행기는 도시)에서 돈으로 채우거나, 어디서든 소지품 연료통(`JERRYCAN_WORDS`)으로 +100km
+- 운전 요청 판정(`tools.drive_requested`): 입력에 자기 탈것을 가리키는 말 + 이동 동사(타고·몰고·달린다·운전·간다 …)가 있으면 사이에 다른 말이 있어도 인정
+- 국경: 운전으로 `country_code`가 바뀌면 `turn_flags.border`. 훔친 탈것이거나 수배도 ≥ `BORDER_CHECK_WANTED`(40)면 `pursuit`(국경 경비대, ★ 최소 3, 검문)를 만들어 다음 턴에 경찰과 같은 방식으로 판정

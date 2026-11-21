@@ -175,8 +175,10 @@ def test_airport_blocked_early_without_embassy(game):
 def test_airport_opens_after_enough_days(game):
     game.place_type = "도시"
     assert "airport" not in game.offer_needs()
-    game.elapsed_hours = 24 * 5
-    assert "airport" in game.offer_needs()
+    game.elapsed_hours = 24 * 1
+    assert "airport" not in game.offer_needs()                       # 2일째: 아직
+    game.elapsed_hours = 24 * 2
+    assert "airport" in game.offer_needs()                           # 3일째부터 (AIRPORT_OPEN_DAY)
     game.place_type = "마을"
     assert "airport" not in game.offer_needs()
 

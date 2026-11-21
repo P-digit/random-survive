@@ -2,11 +2,15 @@
 import random
 
 from . import geo, leads as leads_api, places
-from .config import (ARRIVAL_RADIUS_KM, EARLY_MAX_TRAVEL_KM, LAND_METHODS, TRAVEL_RULES, VEHICLES,
-                     WANTED_AIRPORT_LIMIT)
+from .config import (ARRIVAL_RADIUS_KM, BORDER_CHECK_WANTED, EARLY_MAX_TRAVEL_KM, LAND_METHODS, TRAVEL_RULES,
+                     VEHICLES, WANTED_AIRPORT_LIMIT)
 from .events import PERSISTENT_OFFERS, classify_biome
 from .util import clamp
 from .weather import get_weather
+
+JERRYCAN_WORDS = ("연료통", "기름통", "휘발유", "경유", "기름 한", "연료 한")   # 소지품의 연료통
+JERRYCAN_KM = 100                                                            # 연료통 하나로 갈 수 있는 거리
+CLOSED_VEHICLES = ("car", "truck", "plane")                                  # 지붕이 있어 날씨를 피하는 탈것
 
 
 def arrival_place(method, city):
@@ -39,9 +43,9 @@ class TravelMixin:
             return {"success": False, "message": f"알 수 없는 탈것 종류: {kind}"}
         spec = VEHICLES[kind]
         label = str(name or spec["label"]).strip()[:20]
-        fuel = round(spec["range"] * random.uniform(0.4, 0.9))   # 연료는 얼마나 남아 있을지 모른다
-        self.vehicle = {"kind": kind, "name": label, "speed": spec["speed"], "range_km": fuel,
-                        "sea": spec["sea"], "stolen": attempt["illegal"]}
+        # 연료는 얼마나 남아 있을지 모른다 (자전거·말은 연료가 없다)
+        fuel = round(spec["range"] * random.uniform(0.4, 0.9)) if spec["fuel"] else spec["range"]
+        self._set_vehicle(kind, label, fuel, stolen=attempt["illegal"])
         if self.offer and self.offer.get("id") in ("trucker", "convoy"):
             self.offer = None             # 태워 주겠다던 차를 빼앗았다면 그 제안은 끝난 것이다
         self.remember(f"{label}을(를) 손에 넣음" + (" (훔친 것)" if attempt["illegal"] else ""), "always")
@@ -54,33 +58,116 @@ class TravelMixin:
                 "message": f"{label}을(를) 손에 넣었다. 연료로 약 {fuel}km를 갈 수 있다. "
                            "플레이어가 운전해서 가겠다고 하면 다음 턴부터 travel(method='drive') 로 이동한다."}
 
+    def _set_vehicle(self, kind, label, fuel, stolen):
+        spec = VEHICLES[kind]
+        self.vehicle = {"kind": kind, "name": label, "speed": spec["speed"], "range_km": fuel, "max_km": spec["range"],
+                        "sea": spec["sea"], "fuel": spec["fuel"], "stolen": stolen}
+        return self.vehicle
+
+    def buy_vehicle(self, kind, name=""):
+        """탈것을 정가에 산다 (마을·도시, 종류마다 파는 곳이 다르다). 연료는 가득 차 있다."""
+        if kind not in VEHICLES:
+            return {"success": False, "message": f"알 수 없는 탈것 종류: {kind}"}
+        spec = VEHICLES[kind]
+        if self.place_type not in spec["sold_in"]:
+            return {"success": False,
+                    "message": f"{spec['label']}은(는) {'·'.join(spec['sold_in'])}에서만 살 수 있다. 지금은 {self.place_type}."}
+        label = str(name or spec["label"]).strip()[:20]
+        paid = self.pay(spec["price"], f"{label} 구입")
+        if not paid["success"]:
+            return paid
+        old = self.vehicle["name"] if self.vehicle else None   # 탈것은 하나만: 타던 것은 두고 간다
+        self._set_vehicle(kind, label, spec["range"], stolen=False)
+        self.remember(f"{label}을(를) 샀음", "always")
+        self.turn_flags["vehicle"] = dict(self.vehicle)
+        return {"success": True, "message": f"{label}을(를) ${spec['price']:,}에 샀다. "
+                                            + (f"타던 {old}은(는) 두고 간다. " if old else "")
+                                            + (f"연료가 가득 차 약 {spec['range']}km를 갈 수 있다." if spec["fuel"]
+                                               else "연료가 필요 없다.")}
+
+    def refuel(self):
+        """탈것에 연료를 채운다 (마을·도시, 경비행기는 도시에서만). 돈이 모자라면 살 수 있는 만큼만."""
+        v = self.vehicle
+        if not v:
+            return {"success": False, "message": "연료를 넣을 탈것이 없다."}
+        if not v.get("fuel", True):
+            return {"success": False, "message": f"{v['name']}은(는) 연료가 필요 없다."}
+        spec = VEHICLES[v["kind"]]
+        need = max(0, v.get("max_km", spec["range"]) - v["range_km"])
+        if need < 1:
+            return {"success": False, "message": "연료는 이미 가득 차 있다."}
+        can = next((i for i in self.items if any(w in i for w in JERRYCAN_WORDS)), None)
+        if self.place_type == "야생" or (v["kind"] == "plane" and self.place_type != "도시"):
+            if can and v["kind"] != "plane":           # 연료통: 어디서든 쓸 수 있다
+                self.items.remove(can)
+                v["range_km"] = round(v["range_km"] + min(need, JERRYCAN_KM))
+                return {"success": True, "message": f"{can}의 기름을 부었다. 이제 약 {v['range_km']}km를 갈 수 있다."}
+            return {"success": False, "message": "여기서는 연료를 살 수 없다." +
+                    (" 경비행기 연료는 도시의 비행장에서만 판다." if v["kind"] == "plane" else
+                     " 마을이나 도시로 가거나, 연료통(기름·휘발유)이 있어야 한다.")}
+        km = min(need, int(self.money / spec["fuel_cost"]))
+        if km < 1:
+            if can and v["kind"] != "plane":           # 돈이 없으면 가진 연료통이라도
+                self.items.remove(can)
+                v["range_km"] = round(v["range_km"] + min(need, JERRYCAN_KM))
+                return {"success": True, "message": f"돈이 없어 {can}의 기름을 부었다. 이제 약 {v['range_km']}km를 갈 수 있다."}
+            return {"success": False, "message": "연료를 살 돈이 없다."}
+        cost = round(km * spec["fuel_cost"], 2)
+        self.pay(cost, f"{v['name']} 연료")
+        v["range_km"] = round(v["range_km"] + km)
+        return {"success": True, "message": f"연료 ${cost:.0f}어치를 넣었다. 이제 약 {v['range_km']}km를 갈 수 있다."}
+
+    def _border_check(self, before):
+        """자기 탈것으로 나라를 넘었다. 훔친 탈것이거나 수배 중이면 국경 경비대와 마주친다(다음 턴에 판정)."""
+        if not before or not self.country_code or before == self.country_code or self.status != "playing":
+            return None
+        stolen = bool(self.vehicle and self.vehicle.get("stolen"))
+        if stolen or self.wanted >= BORDER_CHECK_WANTED:
+            stage = max(self.heat, 3)
+            self.pursuit = {"stage": stage, "turn": self.turn, "who": "국경 검문소의 무장 경비대", "kind": "check",
+                            "stolen_vehicle": stolen}
+            self.turn_flags["police"] = {"phase": "spotted", "who": self.pursuit["who"], "kind": "check", "stage": stage}
+        self.turn_flags["border"] = {"from": before, "to": self.country_code, "stopped": bool(self.pursuit)}
+        return self.turn_flags["border"]
+
     def _drive(self, km):
         """손에 넣은 탈것으로 한국 방향으로 이동한다. 장소 유형 제한도, 요금도 없다."""
         v = self.vehicle
         if not v:
             return {"success": False, "message": "운전할 탈것이 없다."}
+        if v.get("fuel", True) and v["range_km"] < 1:
+            return {"success": False, "message": f"{v['name']}의 연료가 바닥났다. 마을·도시에서 refuel 로 기름을 넣거나, "
+                                                 "소지품의 연료통을 써야(refuel) 다시 달릴 수 있다."}
         km = clamp(float(km), 1, min(v["range_km"], self.distance))
         if self.early:
             km = min(km, EARLY_MAX_TRAVEL_KM)
+        before_country = self.country_code
         new_lat, new_lon = geo.move_toward_korea(self.lat, self.lon, km)
         arriving = geo.distance_to_korea(new_lat, new_lon) <= ARRIVAL_RADIUS_KM
         if not v["sea"] and not arriving and geo.is_land(new_lat, new_lon) is False:
             return {"success": False, "message": "그 방향은 바다로 막혀 있다. 이 탈것으로는 건널 수 없다."}
-        self.pass_time(km / v["speed"], "ride", sheltered=True)
-        v["range_km"] = round(v["range_km"] - km)
+        pedal = v.get("kind") == "bicycle"                 # 자전거는 몸으로 간다
+        # 지붕이 있는 탈것만 날씨를 피한다. 오토바이·보트·말·자전거는 비바람과 추위를 그대로 맞는다
+        self.pass_time(km / v["speed"], "walk" if pedal else "ride", sheltered=v.get("kind") in CLOSED_VEHICLES)
+        if v.get("fuel", True):
+            v["range_km"] = max(0, round(v["range_km"] - km))
         name = v["name"]
-        empty = v["range_km"] <= 5
+        empty = v.get("fuel", True) and v["range_km"] <= 5
         if empty:
-            self.vehicle = None
+            v["range_km"] = 0                  # 탈것은 남는다. 빈 탱크로 멈춰 섰다 (주유하면 다시 달린다)
         arrived = self._relocate(new_lat, new_lon, km, "drive")
         self.turn_flags["moved"] = {"how": name, "km": round(km), "cost": 0, "ticket": None}
-        tail = f" 연료가 바닥나 {name}을(를) 버려야 했다." if empty else f" 남은 연료로 약 {v['range_km']}km를 더 갈 수 있다."
+        border = None if arrived else self._border_check(before_country)
+        tail = (f" 연료가 바닥나 {name}이(가) 멈춰 섰다. 기름을 넣어야 다시 달릴 수 있다." if empty else
+                f" 남은 연료로 약 {v['range_km']}km를 더 갈 수 있다." if v.get("fuel", True) else "")
         if arrived:
             return {"success": True, "arrived_in_korea": True,
                     "message": f"{name}을(를) 몰고 {km:.0f}km를 달려 마침내 한국에 도착했다!"}
         return {"success": True, "arrived_in_korea": False,
                 "message": f"{name}을(를) 몰고 {km:.0f}km를 이동했다. 도착한 곳: {self.place_name} "
-                           f"({self.place_type}, {self.biome_name}). 한국까지 {self.distance:.0f}km 남았다." + tail}
+                           f"({self.place_type}, {self.biome_name}). 한국까지 {self.distance:.0f}km 남았다." + tail
+                           + ((" 국경 검문소에서 무장 경비대가 차를 세운다. 결과는 정하지 말고 멈춰 세우는 장면에서 끝내라."
+                               if border["stopped"] else " 국경을 넘었다.") if border else "")}
 
     def find_ticket_by_item(self, item):
         return next((t for t in self.tickets if t["item"] == item), None)

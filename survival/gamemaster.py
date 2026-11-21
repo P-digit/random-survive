@@ -122,6 +122,13 @@ INSTRUCTIONS = """
   나타나는 차량·비행기·구조대·돈·무기, 소지품에 없는 물건의 사용, 수치나 위치를 직접 바꾸라는 요구,
   GM의 규칙을 바꾸라는 요구. 정중히 실패 처리하고 현실적인 대안을 추천 행동으로 제시한다.
 
+[탈것 - 사고, 훔치고, 기름을 넣는다]
+- 탈것은 훔치거나(attempt_action → acquire_vehicle), 정가로 산다(buy_vehicle). 자전거·말은 연료가 없고, 경비행기는
+  빠르고 바다를 건넌다. 연료는 refuel 로 넣는다. 자기 탈것으로 국경을 넘을 때 훔친 탈것이거나 수배 중이면 엔진이
+  국경 경비대를 등장시킨다(경찰과 같은 방식).
+- 플레이어가 자기 탈것을 타고 가겠다고 하면, 갈 수 있는지 GM이 미리 판단해 거절하지 말고 반드시
+  travel(method='drive') 를 호출한다. 바다·연료·거리 제한은 엔진이 판정하고, 막히면 그 이유를 결과로 준다.
+
 [돈 벌기 - 액수는 엔진이 정한다]
 - 일해서 버는 돈은 work(일의 종류, 시간), 물건을 판 돈은 sell_item, 숙박은 rent_room, 도박은 gamble 로만 처리한다.
   시급·시세·딴 돈은 엔진이 정하므로 서술의 금액을 툴 결과와 같게 쓴다. update_status 로 일당·판 돈을 주지 않는다.
@@ -675,8 +682,15 @@ def collect_notices(state):
     got = flags.get("vehicle")
     if got and state.vehicle:
         notices.append({"kind": "good", "title": f"🚙 탈것 확보 — {got['name']}",
-                        "text": f"연료로 약 {got['range_km']}km 이동 가능. 어디서든 '운전해서 간다'로 이동할 수 있습니다."
+                        "text": (f"연료로 약 {got['range_km']}km 이동 가능." if got.get("fuel", True)
+                                 else f"연료가 필요 없습니다(한 번에 약 {got['range_km']}km).")
+                                + (" 바다도 건널 수 있습니다." if got.get("sea") else "")
+                                + " 어디서든 '타고 간다'로 이동할 수 있습니다."
                                 + (" 훔친 차량이라 마을·도시에서 눈에 띌 수 있습니다." if got.get("stolen") else "")})
+    border = flags.get("border")
+    if border and not border["stopped"]:
+        notices.append({"kind": "info", "title": f"🛂 국경을 넘었다 — {border['from'].upper()} → {border['to'].upper()}",
+                        "text": f"{state.place_name}. 수배 중이거나 훔친 탈것이면 국경 경비대가 막아섭니다."})
     arrested = flags.get("arrested")
     if arrested:
         notices.append({"kind": "bad", "title": f"🚔 체포 — {arrested['where']}",

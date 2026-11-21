@@ -360,8 +360,10 @@ def render_hud(state):
             v = state.vehicle
             stolen = ' <span class="badge" style="border-color:var(--red);color:var(--red)">도난 차량</span>' \
                 if v.get("stolen") else ""
+            fuel = (f'남은 연료로 약 {v["range_km"]:,}km' if v.get("fuel", True)
+                    else f'연료 필요 없음(한 번에 약 {v["range_km"]:,}km)')
             rows += (f'<div class="hazard">🚙 <b>{escape(v["name"])}</b>{stolen}</div>'
-                     f'<div class="weather"><span class="sub">남은 연료로 약 {v["range_km"]:,}km · '
+                     f'<div class="weather"><span class="sub">{fuel} · '
                      f'{"바다도 건널 수 있음" if v.get("sea") else "육로만"}</span></div>')
         if state.wanted >= 1:
             change = d.get("wanted", 0)       # 수배도는 오르는 게 나쁜 것이므로 색을 뒤집는다

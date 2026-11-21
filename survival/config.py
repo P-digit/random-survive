@@ -92,12 +92,24 @@ CLOSE_CALL_CHANCE = {"realistic": 0.0, "cinematic": 0.30}[PLAY_STYLE]
 ATTEMPT_FAIL_DAMAGE = {"easy": 5, "normal": 12, "hard": 20, "very_hard": 30}
 
 # 손에 넣은 탈것: 이름, 속도(km/h), 연료를 가득 채웠을 때 갈 수 있는 거리(km), 바다를 건널 수 있는지
+# 탈것: 속도(km/h), 연료로 갈 수 있는 거리, 바다를 건너는가, 연료가 필요한가, 값(구매), 연료값(km당), 파는 곳
 VEHICLES = {
-    "car":       {"label": "승용차",   "speed": 70, "range": 550, "sea": False},
-    "truck":     {"label": "트럭",     "speed": 60, "range": 750, "sea": False},
-    "motorbike": {"label": "오토바이", "speed": 55, "range": 300, "sea": False},
-    "boat":      {"label": "보트",     "speed": 25, "range": 350, "sea": True},
+    "car":       {"label": "승용차",   "speed": 70,  "range": 550, "sea": False, "fuel": True,  "price": 1200,
+                  "fuel_cost": 0.08, "sold_in": ("마을", "도시")},
+    "truck":     {"label": "트럭",     "speed": 60,  "range": 750, "sea": False, "fuel": True,  "price": 2000,
+                  "fuel_cost": 0.12, "sold_in": ("도시",)},
+    "motorbike": {"label": "오토바이", "speed": 55,  "range": 300, "sea": False, "fuel": True,  "price": 350,
+                  "fuel_cost": 0.05, "sold_in": ("마을", "도시")},
+    "boat":      {"label": "보트",     "speed": 25,  "range": 350, "sea": True,  "fuel": True,  "price": 900,
+                  "fuel_cost": 0.15, "sold_in": ("마을", "도시")},
+    "bicycle":   {"label": "자전거",   "speed": 15,  "range": 120, "sea": False, "fuel": False, "price": 40,
+                  "fuel_cost": 0.0, "sold_in": ("마을", "도시")},
+    "animal":    {"label": "말",       "speed": 10,  "range": 80,  "sea": False, "fuel": False, "price": 150,
+                  "fuel_cost": 0.0, "sold_in": ("마을",)},
+    "plane":     {"label": "경비행기", "speed": 180, "range": 900, "sea": True,  "fuel": True,  "price": 15000,
+                  "fuel_cost": 0.40, "sold_in": ("도시",)},
 }
+# 연료가 없는 탈것(자전거·말)은 range 가 '한 턴에 갈 수 있는 거리'다 (체력이 대신 든다)
 
 # 수배도(0~100): 불법 행동을 하면 오르고, 시간이 지나거나 멀리 떠나면 내려간다
 # 수배도는 '현실에서 범죄인 행동'을 '누군가 목격했을 때'만 오른다.
@@ -134,12 +146,15 @@ HYDRATION_PER_LITER = 45
 SIP_ML = 250   # "조금·한 모금·아껴" 마실 때 한 번에 줄어드는 양
 MEASURED_DRINK_SLACK = 1.2   # 용량이 적힌 물을 다 마실 때 GM이 줄 수 있는 수분의 상한(기본 회복량의 배수)
 
+AIRPORT_OPEN_DAY = 3         # 공관을 거치지 않아도 이 날부터 도시에서 공항으로 갈 수 있다 (5 → 3)
+BORDER_CHECK_WANTED = 40     # 자기 탈것으로 국경을 넘을 때 수배도가 이 이상이면 국경 경비대와 마주친다
+
 # --- 돈 ---
 MONEY_GAIN_LIMIT = 600        # 한 번에 얻을 수 있는 돈의 상한(USD). 지갑을 훔치거나 일당을 받는 정도
 
 # --- 초반 제한 ---
 # 게임 시작 후 이 시간 동안은 도시·공항·공관으로 갈 수 없다. 낙하 지점 근처(마을까지)에서 버텨야 한다
-EARLY_GAME_HOURS = 36
+EARLY_GAME_HOURS = 12        # 자유도를 위해 36 → 12 (2026-11-22, 초반에는 마을까지만)
 EARLY_MAX_TRAVEL_KM = 60      # 초반에 한 번에 이동할 수 있는 최대 거리
 
 # --- 목적지로 가기 (go_to) ---
