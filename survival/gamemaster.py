@@ -2,7 +2,8 @@
 import json
 import re
 
-from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT, OPENAI_API_KEY
+from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT
+from .llm import make_client, missing_key_message
 from .intent import crime_intent
 from .state import item_core
 from .tools import TOOLS, execute_tool
@@ -237,11 +238,10 @@ _client = None
 
 
 def get_client():
-    """OpenAI 클라이언트를 한 번만 만들어 재사용한다. 키가 없으면 None."""
+    """LLM 클라이언트(OpenAI 또는 Gemini 어댑터)를 한 번만 만들어 재사용한다. 키가 없으면 None."""
     global _client
-    if _client is None and OPENAI_API_KEY:
-        from openai import OpenAI
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+    if _client is None:
+        _client = make_client()
     return _client
 
 
@@ -782,8 +782,7 @@ def run_turn(state, player_text=None):
     """한 턴을 진행하고 GM의 서술(본문)을 반환한다. 게임 상태는 state에 직접 반영된다."""
     client = get_client()
     if client is None:
-        raise RuntimeError("OpenAI API 키가 없거나 올바르지 않습니다. 프로젝트 폴더의 .env 파일에 "
-                           "OPENAI_API_KEY=sk-... 형태로 실제 키를 넣고 프로그램을 다시 실행하세요.")
+        raise RuntimeError(missing_key_message())
 
     prev_suggestions = list(state.suggestions)
     state.begin_turn()

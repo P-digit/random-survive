@@ -78,6 +78,7 @@ pip install -r requirements.txt
 
 cp .env.example .env             # Windows: copy .env.example .env
 # .env 파일을 열어 OPENAI_API_KEY=sk-... 로 실제 키를 입력 (따옴표 없이)
+# OpenAI 대신 Google Gemini를 쓰려면 GEMINI_API_KEY=... 를 넣습니다 (아래 'Gemini로 실행하기')
 
 python app.py
 ```
@@ -87,6 +88,19 @@ python app.py
 - 처음 실행할 때 위험도 모델을 몇 초 동안 학습합니다.
 - 장면 이미지는 한 장에 10~30초가 걸리고 요금이 듭니다. 화면의 체크박스로 끌 수 있습니다.
 - `chromadb`는 설치가 오래 걸려 선택 패키지로 분리했습니다. 없으면 같은 임베딩을 numpy로 비교하는 방식으로 RAG가 동작합니다.
+
+### Gemini로 실행하기
+
+OpenAI 키가 없으면 Google Gemini API 키로도 게임을 할 수 있습니다. `.env`에 다음처럼 넣습니다.
+
+```bash
+GEMINI_API_KEY=...          # https://aistudio.google.com 에서 발급
+# LLM_PROVIDER=gemini       # 두 키가 모두 있을 때 Gemini를 쓰려면
+```
+
+- 게임 마스터, 서술 보정, 생존 지식 검색(임베딩)이 Gemini로 동작합니다.
+- **장면 이미지는 아직 OpenAI에서만 그립니다.** Gemini로 실행하면 이미지 체크박스가 꺼지고 글로만 진행됩니다.
+- 실행하면 터미널에 `🤖 LLM: Google Gemini · gemini-3.5-flash`처럼 지금 쓰는 공급자가 표시됩니다.
 
 ### 다른 사람에게 보여 주기 (시연용 공유 링크)
 
@@ -99,7 +113,7 @@ python app.py --share
 
 - 게임은 실행한 컴퓨터에서 돌아갑니다. 프로그램을 끄거나 컴퓨터가 잠들면 접속이 끊깁니다.
 - 링크는 임시입니다. 다시 실행하면 주소가 바뀝니다.
-- 접속자 모두가 실행한 컴퓨터의 OpenAI 키를 사용합니다.
+- 접속자 모두가 실행한 컴퓨터의 API 키(OpenAI 또는 Gemini)를 사용합니다.
 - 공유 모드에서는 자동 저장과 이어하기가 꺼집니다(접속자들이 저장 파일 하나를 함께 쓰게 되기 때문). 접속자마다 게임은 따로 진행됩니다.
 
 ### 그 밖의 명령어
@@ -283,6 +297,7 @@ random-survive/
 │   ├── config.py             # 모델 이름, 게임 규칙 수치
 │   ├── state.py              # 게임 상태와 규칙 (엔진)
 │   ├── gamemaster.py         # 한 턴 진행 (Responses API + Tool Calling), 알림, 한국어 정리
+│   ├── llm.py                # LLM 공급자 연결 (OpenAI / Gemini 어댑터)
 │   ├── tools.py              # LLM용 툴 정의와 실행
 │   ├── events.py             # 지형 판별, 상황별 돌발 이벤트, 대형 이벤트(기회)
 │   ├── leads.py              # 단서: 정체·방향·거리를 미리 정하고 따라가면 드러냄
@@ -299,6 +314,7 @@ random-survive/
 │   └── ui.py                 # CSS, 상태창 HTML
 ├── data/survival_guide.txt   # RAG용 생존 지식 문서
 ├── tests/test_engine.py      # 엔진 테스트 (네트워크·API 키 없이 실행)
+├── tests/test_llm.py         # LLM 공급자 어댑터 테스트
 ├── requirements.txt          # 필수 패키지
 ├── requirements-optional.txt # 선택 패키지 (ChromaDB, FastMCP, pytest)
 ├── .env.example
@@ -310,6 +326,7 @@ random-survive/
 ## 사용한 외부 서비스
 
 - [OpenAI API](https://platform.openai.com/) – 게임 마스터(`gpt-4o-mini`), 장면 이미지(`gpt-image-1-mini`), 임베딩(`text-embedding-3-small`). API 키가 필요합니다.
+- [Google Gemini API](https://ai.google.dev/) – OpenAI 대신 쓸 수 있는 게임 마스터(`gemini-3.5-flash`)와 임베딩(`gemini-embedding-001`). OpenAI 호환 주소로 호출합니다.
 - [Open-Meteo](https://open-meteo.com/) – 현재 날씨, 시간별 예보, 고도, 과거 기후 기록. 키가 필요 없고 비상업적 용도는 무료입니다.
 - [OpenStreetMap Nominatim](https://nominatim.org/) – 좌표 → 지명(화면용 한국어, 그림용 영어). 키가 필요 없고, 초당 1회 이하로 사용해야 해서 두 번 조회할 때 1초를 기다립니다.
 
@@ -322,7 +339,7 @@ random-survive/
 - **낙하 판정은 고도만 봅니다.** 해수면보다 낮은 땅(사해 주변 등)은 바다로 보아 제외되고, 해발이 높은 큰 호수 위에 떨어질 수 있습니다.
 - **같은 건물 안의 다른 방은 구분하기 어렵습니다.** 이름이 겹치는 장소(예: '공관 영사과'와 '공관 회의실')는 같은 곳으로 보아 그림을 유지합니다. 그림 편집은 이미지 모델에 의존하므로 세부가 조금 달라질 수 있습니다.
 - **일부는 게임 마스터(LLM)의 판단에 달려 있습니다.** 서술 중에 새로 꺼낸 단서의 등록, 금지어 목록에 없는 억지 행동의 판정, 그림 속 작은 대상의 인식은 완벽하지 않습니다.
-- **오래된 세이브는** OpenAI 쪽 대화 기록이 만료될 수 있습니다. 이때는 최근 대화 6개를 줄거리로 넣어 새 대화로 이어갑니다.
+- **오래된 세이브는** OpenAI 쪽 대화 기록이 만료될 수 있습니다(Gemini는 대화 기록을 프로그램이 메모리에 보관하므로, 프로그램을 다시 켜면 항상 이 방식으로 이어집니다). 이때는 최근 대화 6개를 줄거리로 넣어 새 대화로 이어갑니다.
 - 계획 중: 음성 내레이션(TTS), 지도 표시, 플레이 기록 저장과 랭킹, 클러스터링(K-Means)을 이용한 기후대 분류.
 
 ## 라이선스

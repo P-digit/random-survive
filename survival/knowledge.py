@@ -5,6 +5,7 @@ chromadb가 설치되어 있지 않으면 같은 임베딩을 numpy로 직접 �
 임베딩 자체가 실패하면 간단한 키워드 검색으로 대신한다.
 """
 import json
+import re
 
 import numpy as np
 
@@ -17,7 +18,20 @@ _chunks = None
 _collection = None
 _vector_failed = False
 _matrix = None
-EMBED_CACHE = MODEL_DIR / "guide_embeddings.json"
+
+
+def _model_slug():
+    return re.sub(r"[^A-Za-z0-9_-]", "_", EMBEDDING_MODEL)
+
+
+def embed_cache_path():
+    """임베딩 캐시 파일. 모델마다 따로 둬서 공급자를 바꿔도 서로 덮어쓰지 않는다."""
+    return MODEL_DIR / f"guide_embeddings_{_model_slug()}.json"
+
+
+def collection_name():
+    """임베딩 모델마다 컬렉션을 따로 둔다 (모델이 다르면 벡터를 섞어 비교할 수 없다)."""
+    return f"{COLLECTION_NAME}_{_model_slug()}"[:63]
 
 
 def load_chunks():
@@ -40,12 +54,12 @@ def get_collection(client):
     if _collection is None:
         import chromadb
         chroma = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        collection = chroma.get_or_create_collection(name=COLLECTION_NAME)
+        collection = chroma.get_or_create_collection(name=collection_name())
         chunks = load_chunks()
         if collection.count() != len(chunks):
             if collection.count() > 0:      # 문서가 바뀌었으면 다시 만든다
-                chroma.delete_collection(COLLECTION_NAME)
-                collection = chroma.get_or_create_collection(name=COLLECTION_NAME)
+                chroma.delete_collection(collection_name())
+                collection = chroma.get_or_create_collection(name=collection_name())
             collection.add(
                 ids=[f"chunk{i}" for i in range(len(chunks))],
                 documents=chunks,
@@ -61,13 +75,15 @@ def numpy_search(client, query, n_results=3):
     chunks = load_chunks()
     if _matrix is None:
         try:
-            cached = json.loads(EMBED_CACHE.read_text(encoding="utf-8"))
+            cached = json.loads(embed_cache_path().read_text(encoding="utf-8"))
             assert cached["chunks"] == chunks       # 문서가 바뀌었으면 다시 만든다
+            assert cached.get("model") == EMBEDDING_MODEL   # 임베딩 모델이 바뀌면 벡터 공간이 달라 다시 만든다
             vectors = cached["embeddings"]
         except Exception:
             vectors = embed(client, chunks)
             MODEL_DIR.mkdir(exist_ok=True)
-            EMBED_CACHE.write_text(json.dumps({"chunks": chunks, "embeddings": vectors}), encoding="utf-8")
+            embed_cache_path().write_text(json.dumps({"model": EMBEDDING_MODEL, "chunks": chunks,
+                                                "embeddings": vectors}), encoding="utf-8")
         matrix = np.array(vectors, dtype=float)
         _matrix = matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
     q = np.array(embed(client, [query])[0], dtype=float)
