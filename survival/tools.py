@@ -181,9 +181,9 @@ TOOLS = [
         "(야생에서 공관을 찾으면 먼저 가장 가까운 마을로, 마을에서 공항을 찾으면 먼저 도시로). "
         "한 턴에 다 못 가면 중간 지점에서 멈추고, 다음 턴에 플레이어가 계속 가겠다고 하면 target='continue'. "
         "이때는 advance_time, travel 을 따로 호출하지 않는다.",
-        {"target": {"type": "string", "enum": ["village", "city", "embassy", "airport", "continue"],
+        {"target": {"type": "string", "enum": ["village", "city", "embassy", "airport", "mission", "continue"],
                     "description": "village 가장 가까운 마을, city 가장 가까운 도시, embassy 한국 공관, "
-                                   "airport 국제공항, continue 진행 중인 여정을 이어 감"}},
+                                   "airport 국제공항, mission 맡은 의뢰의 목적지 도시, continue 진행 중인 여정을 이어 감"}},
     ),
     _function(
         "seek_help",
@@ -347,6 +347,7 @@ GO_WORDS = {
     "city": ("도시", "시내", "시가지", "읍내"),
     "embassy": ("대사관", "영사관", "공관", "영사"),
     "airport": ("공항", "비행기", "항공"),
+    "mission": ("의뢰", "배달지", "목적지", "소포를", "밀수품", "물건을 전하", "짐을 전하", "배달하러"),
     "continue": ("계속 간다", "계속 가", "계속 걷", "이어서 간다", "이어 간다", "이어간다", "가던 길", "마저 간다",
                  "다시 출발", "출발한다", "출발하자"),
 }

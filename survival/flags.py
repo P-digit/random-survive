@@ -53,6 +53,7 @@ class TurnFlags(TypedDict, total=False):
     economy: dict                 # 일·판매·숙소·도박 결과 {kind: work/sell/room/gamble, amount, ...}
     border: dict                  # 자기 탈것으로 국경을 넘음 {from, to, stopped(경비대와 마주침)}
     achievements: list            # 이번 턴에 새로 연 업적 id
+    mission: dict                 # 의뢰 {phase: offered/passed/accepted/done/failed, kind, target, reward, ...}
 
 
 class PlaceFlags(TypedDict, total=False):

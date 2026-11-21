@@ -81,7 +81,16 @@ class JourneyMixin:
             dest = {"type": "city", "name": city["name"], "label": city["name"], "lat": city["lat"],
                     "lon": city["lon"], "place": "도시"}
             return self._start_journey(dest, notes)
-        return {"success": False, "message": "target 은 village, city, embassy, airport, continue 중 하나다."}
+        if target == "mission":
+            m = self.mission
+            if not m:
+                return {"success": False, "message": "맡은 의뢰가 없다."}
+            if self.early:
+                return {"success": False, "message": self.early_message()}
+            dest = {"type": "city", "name": m["target"], "label": f"의뢰 목적지 {m['target']}", "lat": m["lat"],
+                    "lon": m["lon"], "place": "도시"}
+            return self._start_journey(dest, notes)
+        return {"success": False, "message": "target 은 village, city, embassy, airport, mission, continue 중 하나다."}
 
     def _head_to_village(self, notes):
         """야생에서 가장 가까운 마을로. 마을로 이어지는 단서가 있으면 그것을 따라간다."""

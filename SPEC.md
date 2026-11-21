@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 247개)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 261개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -28,7 +28,8 @@
 | `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
 | `survival/police.py` | `PoliceMixin`: 수배 단계(★1~5), 경찰 등장(`roll_police`), 대응 판정(`respond_to_police`), 은신(`lay_low`), 변장. 입력 → 대응 종류(`classify_response`) (11장) |
 | `survival/economy.py` | `EconomyMixin`: 일(`work`, 시급·기술), 팔기(`sell_item`, 시세), 방(`rent_room`, 은신처), 도박(`gamble`) (12장) |
-| `survival/achievements.py` | 여정 기록(`record_turn`, `end_turn`에서 턴 기록으로 통계를 모음), 업적 16개, 명예의 전당(`saves/hall_of_fame.json`), 결산(`run_summary`) (14장) |
+| `survival/achievements.py` | 여정 기록(`record_turn`, `end_turn`에서 턴 기록으로 통계를 모음), 업적 18개, 명예의 전당(`saves/hall_of_fame.json`), 결산(`run_summary`) (14장) |
+| `survival/missions.py` | `MissionMixin`: 의뢰 등장(`roll_mission`), 수락 판정(`resolve_mission_offer`), 완료·실패(`check_mission`), 세관(`customs_check`) (15장) |
 | `survival/util.py` | `clamp` 등 여러 모듈이 함께 쓰는 작은 도구 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
 | `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
@@ -61,6 +62,7 @@
 - **기회:** `offer`(진행 중), `expired_offers`, `done_offers`(받아들이거나 거절해 끝난 기회. 재등장·되풀이 차단용)
 - **범죄:** `wanted`(0~100, ★단계는 `police.heat_stage`), `crime_scene`, `enemies`, `notorious`, `stolen_items`
 - **경제:** `skills`(일의 기술 Lv), `work_hours`, `lodging`(빌린 방 {lat, lon, place, until})
+- **의뢰:** `mission`(맡은 의뢰), `mission_offer`(이번 턴 제안)
 - **경찰:** `pursuit`(마주친 경찰 {stage, turn, who, kind: check/chase}), `disguise`({until, how})
 - **턴 임시값:** `turn_flags`(`TurnFlags`), `delta`, `notices`, `event`. 장소의 사정은 `flags`(`PlaceFlags`). 두 dict의 키 목록과 뜻은 `survival/flags.py`에 있고, 새 키는 거기 먼저 적는다(`tests/test_flags.py`가 코드의 모든 키를 AST로 모아 대조)
 - **상태 머신:** `status` = `playing` → `won`(서울 60km 이내) | `dead`(체력 0, `death_reason`)
@@ -155,6 +157,14 @@
 
 ## 14. 업적과 여정 결산 (`survival/achievements.py`)
 - 통계는 `end_turn`의 `record_turn` 한 곳에서 그 턴의 기록(`turn_flags`: moved·earned·paid·attempt·police·arrested·vehicle·border·economy)으로 모은다 → `state.stats`(turns, km, countries, earned, spent, crimes, criticals, escapes, arrests, vehicles, borders, work_hours, sold, jackpots, max_heat, peak_money)
-- 업적 16개(`ACHIEVEMENTS`: 조건 함수). 새로 열리면 `state.achievements`, `turn_flags.achievements` → 알림 "🏆 업적 — …", 효과음(discover), 상태창 LIFE 칸
+- 업적 18개(`ACHIEVEMENTS`: 조건 함수). 새로 열리면 `state.achievements`, `turn_flags.achievements` → 알림 "🏆 업적 — …", 효과음(discover), 상태창 LIFE 칸
 - 명예의 전당: 판이 바뀌어도 남는 업적별 횟수·처음 연 날. `HALL_ENABLED`(공유 모드에서는 끔), 테스트는 임시 경로
 - 게임이 끝나면 `app.play`가 마지막 응답 뒤에 `run_summary`(결산 표와 이번 판의 업적)를 붙인다
+
+## 15. 의뢰 (`survival/missions.py`)
+- **등장(엔진):** `begin_turn` 끝에서 마을 10%·도시 15%(기회가 온 턴·의뢰 중·경찰과 마주친 중에는 없음). 밀수 비율 35%(수배도 20 이상이면 60%). 목적지는 `places.CITY_LIST`에서 80~900km, 한국에 가까워지는 곳 상위 5개 중 하나(밀수는 다른 나라). 보수 배달 40+0.15/km, 밀수 150+0.4/km. 기한 km/40(밀수 /50)+24시간
+- **수락:** 제안한 턴에 GM은 제안 장면까지만 서술. 다음 턴 입력을 GM 전에 판정(`accepts_mission`: 맡겠·수락·하겠다 … 거절 말이 없을 것). 수락하면 짐(소포/밀수품 꾸러미)이 소지품에 들어오고, 밀수품은 `stolen_items`에도 들어가 체포되면 압수
+- **이동:** `go_to(target='mission')` → 목적지 도시로 여정(초반 제한 적용)
+- **완료·실패(`end_turn`의 `check_mission`):** 목적지 30km 안이면 보수(`money_log` shown), 짐 제거, 사실로 기억(다음 턴 GM이 앎). 짐을 잃었거나(압수·판매) 기한이 지나면 실패
+- **세관·국경:** 밀수품을 가지고 대중교통으로 나라를 넘으면 35% 확률로 세관원(`customs_check`, `_relocate`), 자기 탈것이면 `_border_check`가 항상 경비대. 둘 다 경찰과 같은 방식으로 다음 턴 판정
+- GM 입력 `[의뢰 제안]`/`[의뢰 수락]`/`[맡은 의뢰]`, 알림 📦, 효과음(제안·완료·실패), 제안 턴의 첫 버튼 "의뢰를 맡겠다고 한다", 상태창 LIFE 칸, 업적(심부름꾼 3번, 밀수꾼 1번)

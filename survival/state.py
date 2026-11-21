@@ -13,6 +13,7 @@ from .events import BIOME_HAZARDS, BIOMES, PERSISTENT_OFFERS, classify_biome, ro
 from .flags import PlaceFlags, TurnFlags
 from .inventory import InventoryMixin
 from .journey import JourneyMixin
+from .missions import MissionMixin
 from .offers import OfferMixin
 from .police import PoliceMixin
 from .risk_model import predict_risk
@@ -22,7 +23,8 @@ from .weather import get_weather, weather_category
 
 
 @dataclass
-class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixin, PoliceMixin, EconomyMixin):
+class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixin, PoliceMixin, EconomyMixin,
+                MissionMixin):
     lat: float
     lon: float
     place_name: str
@@ -99,6 +101,8 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
     work_hours: dict = field(default_factory=dict) # 일한 시간 (기술 경험)
     lodging: dict = field(default_factory=dict)    # 빌린 방 {lat, lon, place, until, nights} — 은신처
     stats: dict = field(default_factory=dict)      # 여정 기록 (achievements.record_turn)
+    mission: dict | None = None       # 맡은 의뢰 {kind: deliver/smuggle, giver, item, target, lat, lon, reward, deadline}
+    mission_offer: dict | None = None  # 이번 턴에 의뢰인이 제안한 의뢰 (다음 턴 입력으로 수락 판정)
     achievements: list = field(default_factory=list)   # 이번 판에 연 업적 id
     _snapshot: dict = field(default_factory=dict)
 
@@ -519,6 +523,8 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
                 self.offer["turn"] = self.turn
                 self.last_major_turn = self.turn
                 self.event = None        # 기회가 온 턴에는 일반 이벤트를 겹치지 않는다
+        if not (self.offer and self.offer.get("turn") == self.turn):
+            self.roll_mission()          # 마을·도시에서 의뢰인이 나타날 수 있다 (기회가 온 턴에는 겹치지 않는다)
 
     def end_turn(self, default_hours=0.5, default_activity="other"):
         """턴 종료: LLM이 시간을 흘리지 않았다면 엔진이 대신 흘리고, 수치 변화를 기록한다."""
@@ -529,6 +535,7 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
             self.expire_offer()          # 제안은 나온 다음 턴까지만 유효하다
         now = self._tracked()
         self.delta = {k: round(now[k] - self._snapshot.get(k, now[k]), 2) for k in now}
+        self.check_mission()              # 의뢰 완료(목적지 도착)·실패(기한, 짐을 잃음)
         from .achievements import record_turn
         record_turn(self)                 # 여정 기록과 업적
         # 낮↔밤 변화는 장면이 바뀐 것이 아니다. 그림은 같은 장면을 편집해 빛만 바꾼다 (app.py)
