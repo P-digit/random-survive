@@ -104,6 +104,7 @@ class CrimeMixin:
                 effects.append(f"{crime} — 혼란을 틈타 사라져 수배되지 않음")
             elif gain > 0:
                 self.wanted = clamp(self.wanted + gain)
+                self.disguise = {}                 # 얼굴이 다시 알려졌다
                 effects.append(f"{crime} 목격됨 → 수배도 +{gain} (현재 {self.wanted:.0f})")
             else:
                 effects.append(f"{crime} — 목격자 없음, 수배되지 않음")
@@ -172,9 +173,9 @@ class CrimeMixin:
                                        "crime": crime, "turn": self.turn})
                 self.notorious = self.notorious[-6:]
 
-    def _arrest(self, where):
-        """붙잡혔다: 하루를 잃고, 벌금을 내고, 탈것과 표를 압수당한다."""
-        fine = round(self.money * 0.5, 2)
+    def _arrest(self, where, fine_rate=0.5, wanted_cut=40, hours=24):
+        """붙잡혔다: 하루를 잃고, 벌금을 내고, 탈것과 표를 압수당한다. (자수하면 벌금·구금·수배도가 줄어든다)"""
+        fine = round(self.money * fine_rate, 2)
         self.money = round(self.money - fine, 2)
         lost = []
         if self.vehicle:
@@ -190,12 +191,18 @@ class CrimeMixin:
             self.tickets.remove(ticket)
             if ticket["item"] in self.items:
                 self.items.remove(ticket["item"])
-        self.pass_time(12, "rest", sheltered=True)
-        self.pass_time(12, "rest", sheltered=True)
-        self.wanted = clamp(self.wanted - 40)
-        self.turn_flags["arrested"] = {"where": where, "fine": fine, "lost": lost}
+        for _ in range(int(hours // 12)):
+            # 구금 중에는 12시간마다 최소한의 식사와 물이 나온다 (굶겨서 감옥에서 죽게 하지 않는다)
+            self.satiety, self.hydration = max(self.satiety, 60.0), max(self.hydration, 60.0)
+            self.pass_time(12, "rest", sheltered=True)
+        self.satiety, self.hydration = max(self.satiety, 40.0), max(self.hydration, 40.0)   # 풀려나기 전 끼니
+        self.wanted = clamp(self.wanted - wanted_cut)
+        self.pursuit = None
+        self.disguise = {}
+        self.turn_flags["arrested"] = {"where": where, "fine": fine, "lost": lost, "hours": hours}
         return {"success": False, "arrested": True,
-                "message": f"{where}에서 붙잡혔다. 하루 동안 구금된 뒤 벌금 ${fine:.0f}을(를) 내고 풀려났다."
+                "message": f"{where}에서 붙잡혔다. {'하루' if hours >= 24 else f'{hours}시간'} 동안 구금된 뒤 "
+                           f"벌금 ${fine:.0f}을(를) 내고 풀려났다."
                            + (f" 압수당한 것: {', '.join(lost)}." if lost else "")}
 
     def arrest(self, reason=""):

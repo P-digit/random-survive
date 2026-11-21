@@ -67,11 +67,12 @@ def test_wanted_consequences(game, monkeypatch):
     assert game.vehicle is None and game.tickets == [] and not any("항공권" in i for i in game.items)
     assert game.elapsed_hours - hours == 24 and game.wanted < 40 and game.money < 2000
 
-    game.wanted = 60                                                 # 수배 중이면 도시에서 경찰 이벤트
+    game.wanted = 60                                                 # 수배 ★4면 도시에서 경찰이 나타나 추격한다
     game.offer, game.last_major_turn = None, game.turn + 100
     fix_roll(monkeypatch, 0.0)
     game.begin_turn()
-    assert game.event and "경찰" in game.event["text"]
+    assert game.pursuit and game.pursuit["kind"] == "chase" and game.turn_flags["police"]["phase"] == "spotted"
+    game.pursuit = None
 
     game.wanted = 30
     game.pass_time(5, "rest")

@@ -354,7 +354,7 @@ def render_hud(state):
                      '<div class="weather"><span class="sub">그쪽으로 가면 정체를 확인할 수 있습니다</span></div></div>')
 
     # 탈것 + 수배도
-    if state.vehicle or state.wanted >= 1:
+    if state.vehicle or state.wanted >= 1 or state.pursuit:
         rows = ""
         if state.vehicle:
             v = state.vehicle
@@ -365,6 +365,11 @@ def render_hud(state):
                      f'{"바다도 건널 수 있음" if v.get("sea") else "육로만"}</span></div>')
         if state.wanted >= 1:
             change = d.get("wanted", 0)       # 수배도는 오르는 게 나쁜 것이므로 색을 뒤집는다
+            from .police import STAGE_NAMES, stars
+            rows += (f'<div class="hazard">🚨 <b>{stars(state.wanted)}</b> {STAGE_NAMES[state.heat]}'
+                     + (' · <span class="badge">변장 중</span>' if state.disguised else "")
+                     + (' · <span class="badge" style="border-color:var(--red);color:var(--red)">경찰이 쫓는 중</span>'
+                        if state.pursuit else "") + "</div>")
             rows += (_bar("🚨 수배", state.wanted, "var(--red)", change)
                      .replace(_delta(change), _delta(change, good_when_up=False))
                      .replace("changed-up", "changed-tmp").replace("changed-down", "changed-up")
