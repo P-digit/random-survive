@@ -98,8 +98,8 @@ GEMINI_API_KEY=...          # https://aistudio.google.com 에서 발급
 # LLM_PROVIDER=gemini       # 두 키가 모두 있을 때 Gemini를 쓰려면
 ```
 
-- 게임 마스터, 서술 보정, 생존 지식 검색(임베딩)이 Gemini로 동작합니다.
-- **장면 이미지는 아직 OpenAI에서만 그립니다.** Gemini로 실행하면 이미지 체크박스가 꺼지고 글로만 진행됩니다.
+- 게임 마스터, 서술 보정, 생존 지식 검색(임베딩), 장면 이미지(생성·편집·Vision 읽기)가 모두 Gemini로 동작합니다.
+- 장면 이미지는 `gemini-3.1-flash-image`로 그립니다(한 장에 10~15초). `IMAGE_MODEL`로 바꿀 수 있습니다.
 - 실행하면 터미널에 `🤖 LLM: Google Gemini · gemini-3.5-flash`처럼 지금 쓰는 공급자가 표시됩니다.
 
 ### 다른 사람에게 보여 주기 (시연용 공유 링크)
@@ -297,7 +297,7 @@ random-survive/
 │   ├── config.py             # 모델 이름, 게임 규칙 수치
 │   ├── state.py              # 게임 상태와 규칙 (엔진)
 │   ├── gamemaster.py         # 한 턴 진행 (Responses API + Tool Calling), 알림, 한국어 정리
-│   ├── llm.py                # LLM 공급자 연결 (OpenAI / Gemini 어댑터)
+│   ├── llm.py                # LLM 공급자 연결 (OpenAI / Gemini 어댑터: 글·그림)
 │   ├── tools.py              # LLM용 툴 정의와 실행
 │   ├── events.py             # 지형 판별, 상황별 돌발 이벤트, 대형 이벤트(기회)
 │   ├── leads.py              # 단서: 정체·방향·거리를 미리 정하고 따라가면 드러냄
@@ -326,7 +326,7 @@ random-survive/
 ## 사용한 외부 서비스
 
 - [OpenAI API](https://platform.openai.com/) – 게임 마스터(`gpt-4o-mini`), 장면 이미지(`gpt-image-1-mini`), 임베딩(`text-embedding-3-small`). API 키가 필요합니다.
-- [Google Gemini API](https://ai.google.dev/) – OpenAI 대신 쓸 수 있는 게임 마스터(`gemini-3.5-flash`)와 임베딩(`gemini-embedding-001`). OpenAI 호환 주소로 호출합니다.
+- [Google Gemini API](https://ai.google.dev/) – OpenAI 대신 쓸 수 있는 게임 마스터(`gemini-3.5-flash`), 임베딩(`gemini-embedding-001`), 장면 이미지(`gemini-3.1-flash-image`). 글·임베딩은 OpenAI 호환 주소로, 그림은 `google-genai` 라이브러리로 호출합니다.
 - [Open-Meteo](https://open-meteo.com/) – 현재 날씨, 시간별 예보, 고도, 과거 기후 기록. 키가 필요 없고 비상업적 용도는 무료입니다.
 - [OpenStreetMap Nominatim](https://nominatim.org/) – 좌표 → 지명(화면용 한국어, 그림용 영어). 키가 필요 없고, 초당 1회 이하로 사용해야 해서 두 번 조회할 때 1초를 기다립니다.
 

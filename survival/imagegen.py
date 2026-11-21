@@ -1,8 +1,9 @@
-"""현재 장면 이미지 생성 (멀티모달 파트, Images API)."""
+"""현재 장면 이미지 생성 (멀티모달 파트, Images API. Gemini는 llm.GeminiImages가 같은 모양으로 그린다)."""
 import base64
 import time
 
 from .config import IMAGE_MODEL, LLM_MODEL, OUTPUT_DIR
+from .llm import image_mime
 import re
 
 from .events import BIOMES
@@ -114,7 +115,8 @@ def read_image(client, path):
     """
     try:
         with open(path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode()
+            data = f.read()
+        encoded = base64.b64encode(data).decode()
         response = client.responses.create(
             model=LLM_MODEL,
             max_output_tokens=150,
@@ -124,7 +126,7 @@ def read_image(client, path):
                          "광원(해, 달)을 최대 6개, 쉼표로만 구분해 나열해. 각 항목은 '한국어 명사구 | English noun "
                          "phrase' 형식. 설명이나 문장은 쓰지 마. "
                          "예: 통나무 오두막 | log cabin, 얼어붙은 호수 | frozen lake, 침엽수림 | conifer forest"},
-                {"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "low"},
+                {"type": "input_image", "image_url": f"data:{image_mime(data)};base64,{encoded}", "detail": "low"},
             ]}],
         )
         things = [s.strip(" .\n-") for s in (response.output_text or "").replace("\n", ",").split(",")]
@@ -238,10 +240,14 @@ def build_edit_prompt(state, strict=False):
         + source + strict_line + change + " " + signs + "No captions, no watermark.")
 
 
+EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+
+
 def _save(b64):
     image_bytes = base64.b64decode(b64)   # Base64 → 이미지
     OUTPUT_DIR.mkdir(exist_ok=True)
-    path = OUTPUT_DIR / f"scene_{int(time.time() * 1000)}.png"
+    # 공급자마다 형식이 다르다(OpenAI PNG, Gemini JPEG). 확장자를 실제 형식에 맞춘다
+    path = OUTPUT_DIR / f"scene_{int(time.time() * 1000)}.{EXTENSIONS[image_mime(image_bytes)]}"
     with open(path, "wb") as f:
         f.write(image_bytes)
     return str(path)

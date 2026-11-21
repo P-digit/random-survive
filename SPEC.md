@@ -6,9 +6,9 @@
 ## 1. 개요
 - **장르:** LLM 게임 마스터(GM)가 서술하는 한국어 텍스트 생존 게임
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
-- **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API + Vision(장면 그림, OpenAI만), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
+- **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 148개: 엔진 135 + LLM 어댑터 13)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 152개: 엔진 135 + LLM 어댑터 17)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -22,7 +22,7 @@
 | `app.py` | Gradio 화면 구성, 새 게임/이어하기, 턴 실행(`play`), 장면 그림 갱신 여부 판단 |
 | `survival/state.py` | `GameState` 데이터클래스와 모든 게임 규칙: 시간 흐름, 생체 수치, 소지품, 이동·여정, 기회(offer), 범죄·수배·체포, 단서, 장면, 턴 시작/종료 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
-| `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
+| `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
 | `survival/tools.py` | GM이 호출하는 툴 스키마(`TOOLS`)와 실행(`execute_tool`), 툴 남용·요청하지 않은 행동 차단 가드, 기회 수락/되풀이 판정(`offer_action`) |
 | `survival/events.py` | 바이옴 판별, 돌발 이벤트 178개, 대형 이벤트(기회) 9종, 수락/거절 어휘 |
 | `survival/leads.py` | 단서(lead) 생성과 정체 공개: 단서가 생길 때 정체·방향·거리를 미리 확정 |
@@ -81,12 +81,14 @@
 
 ## 9. LLM 공급자 (`survival/llm.py`, `survival/config.py`)
 - **고르기:** `.env`의 `LLM_PROVIDER`(openai/gemini). 없으면 키가 있는 쪽, 둘 다 있으면 OpenAI (`config.choose_provider`)
-- **기본 모델:** OpenAI `gpt-4o-mini` + `text-embedding-3-small`, Gemini `gemini-3.5-flash` + `gemini-embedding-001`. `LLM_MODEL`, `EMBEDDING_MODEL`로 바꿀 수 있다
+- **기본 모델:** OpenAI `gpt-4o-mini` + `text-embedding-3-small` + `gpt-image-1-mini`, Gemini `gemini-3.5-flash` + `gemini-embedding-001` + `gemini-3.1-flash-image`. `LLM_MODEL`, `EMBEDDING_MODEL`, `IMAGE_MODEL`로 바꿀 수 있다
 - **Gemini 어댑터(`ChatResponses`):** 게임 코드는 Responses API 모양 그대로 호출한다. 어댑터가 이것을 Chat Completions로 바꾼다
   - 툴 정의: 평평한 Responses 형식 → `{"type": "function", "function": {...}}`
   - 입력: 문자열 → user 메시지, `function_call_output` → tool 메시지, `input_image` → `image_url`
   - 대화 이어가기: 응답 id별로 대화 기록을 메모리에 보관(최대 512개 응답, `threading.Lock`으로 공유 모드 동시 접속 보호, 대화당 60개 메시지. 자를 때는 user 메시지에서 끊어 툴 호출과 결과가 갈라지지 않게 함). 모델이 준 assistant 메시지는 `thought_signature`(extra_content)까지 그대로 돌려준다
   - 기록이 없는 `previous_response_id`(프로그램 재시작 후 이어하기)는 `LookupError` → `run_turn`이 줄거리(`make_recap`)로 새 대화를 시작
   - 출력 한도: Gemini는 생각 토큰도 한도에 포함하므로 `max_output_tokens`에 1024를 더한다(`GEMINI_REASONING_EFFORT`, 기본 low)
-- **장면 그림:** `IMAGES_SUPPORTED`는 OpenAI일 때만 True. Gemini면 UI 체크박스가 꺼지고 `client.images`는 `NotImplementedError`
+- **장면 그림(`GeminiImages`):** `client.images.generate/edit`를 `google-genai`의 `generate_content(response_modalities=["IMAGE"])`로 바꾼다. 편집은 이전 그림을 함께 보낸다. `size` → 화면비(1536x1024 → 3:2), 결과는 OpenAI와 같은 `data[0].b64_json`. 그림이 오지 않으면(차단 등) RuntimeError → `imagegen`이 이전 그림을 유지
+- **그림 형식:** Gemini는 JPEG, OpenAI는 PNG를 준다. `imagegen._save`는 실제 형식(`llm.image_mime`)에 맞는 확장자로 저장하고, `read_image`도 그 형식으로 Vision에 보낸다
+- `google-genai`가 설치되어 있지 않으면 글은 그대로 되고 그림만 실패한다
 - **RAG 임베딩 캐시:** 임베딩 모델별로 따로 둔다(`models/guide_embeddings_<모델>.json`, ChromaDB 컬렉션 `survival_guide_<모델>`)

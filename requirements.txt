@@ -1,6 +1,7 @@
 # 게임 실행에 필요한 최소 패키지
 gradio>=5.0
 openai>=1.66
+google-genai>=1.30     # Gemini 그림 생성·편집 (Gemini 공급자를 쓸 때)
 python-dotenv
 requests
 numpy

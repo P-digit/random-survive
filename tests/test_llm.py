@@ -132,10 +132,77 @@ def test_store_is_bounded(monkeypatch):
     assert client.responses.history(ids[0]) == [] and client.responses.history(ids[-1])
 
 
-def test_images_are_not_supported_on_gemini():
-    client = llm.GeminiClient(FakeChat([]))
-    with pytest.raises(NotImplementedError):
-        client.images.generate(model="x", prompt="y")
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 20
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 20
+
+
+class FakeGenai:
+    """google-genai 클라이언트 흉내: generate_content 호출을 기록하고 정해 둔 그림(또는 빈 응답)을 돌려준다."""
+
+    def __init__(self, data=JPEG):
+        self.calls = []
+        self.data = data
+        self.models = SimpleNamespace(generate_content=self._generate)
+
+    def _generate(self, model, contents, config):
+        self.calls.append({"model": model, "contents": contents, "config": config})
+        parts = [SimpleNamespace(inline_data=SimpleNamespace(data=self.data))] if self.data else \
+            [SimpleNamespace(inline_data=None)]
+        return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=parts))],
+                               prompt_feedback=SimpleNamespace(block_reason=None if self.data else "SAFETY"))
+
+
+def test_image_mime():
+    assert llm.image_mime(JPEG) == "image/jpeg"
+    assert llm.image_mime(PNG) == "image/png"
+    assert llm.image_mime(b"RIFF\0\0\0\0WEBPxx") == "image/webp"
+
+
+def test_gemini_images_generate_returns_openai_shape():
+    import base64
+    genai = FakeGenai()
+    client = llm.GeminiClient(FakeChat([]), genai_client=genai)
+    result = client.images.generate(model="gemini-img", prompt="forest", size="1536x1024", quality="low")
+    assert base64.b64decode(result.data[0].b64_json) == JPEG
+    call = genai.calls[0]
+    assert call["model"] == "gemini-img" and call["contents"] == "forest"
+    assert call["config"].image_config.aspect_ratio == "3:2"
+    assert call["config"].response_modalities == ["IMAGE"]
+
+
+def test_gemini_images_edit_sends_previous_picture(tmp_path):
+    genai = FakeGenai()
+    client = llm.GeminiClient(FakeChat([]), genai_client=genai)
+    previous = tmp_path / "prev.png"
+    previous.write_bytes(PNG)
+    with open(previous, "rb") as image:
+        client.images.edit(model="gemini-img", image=image, prompt="make it night", size="1536x1024")
+    picture, prompt = genai.calls[0]["contents"]
+    assert prompt == "make it night"
+    assert picture.inline_data.data == PNG and picture.inline_data.mime_type == "image/png"
+
+
+def test_gemini_images_errors_are_raised():
+    with pytest.raises(RuntimeError, match="SAFETY"):
+        llm.GeminiClient(FakeChat([]), genai_client=FakeGenai(data=None)).images.generate(model="m", prompt="p")
+    with pytest.raises(RuntimeError, match="google-genai"):
+        llm.GeminiClient(FakeChat([])).images.generate(model="m", prompt="p")
+
+
+def test_scene_is_saved_with_real_format_and_read_with_its_mime(monkeypatch, tmp_path):
+    """Gemini는 JPEG을 준다: 확장자를 .jpg로 저장하고, Vision에도 image/jpeg로 보낸다. 실패하면 그림 없이 진행."""
+    from survival import imagegen
+    monkeypatch.setattr(imagegen, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(imagegen, "build_prompt", lambda state: "scene")
+    client = llm.GeminiClient(FakeChat([text("통나무 오두막 | log cabin, 호수 | lake")]), genai_client=FakeGenai())
+    path = imagegen.generate_scene(client, SimpleNamespace())
+    assert path.endswith(".jpg")
+    ko, en = imagegen.read_image(client, path)
+    assert ko == ["통나무 오두막", "호수"] and en == ["log cabin", "lake"]
+    sent = client.responses._chat.calls[0]["messages"][0]["content"][1]["image_url"]["url"]
+    assert sent.startswith("data:image/jpeg;base64,")
+    broken = llm.GeminiClient(FakeChat([]), genai_client=FakeGenai(data=None))
+    assert imagegen.generate_scene(broken, SimpleNamespace()) is None
 
 
 def test_run_turn_through_gemini_adapter(game, monkeypatch):
