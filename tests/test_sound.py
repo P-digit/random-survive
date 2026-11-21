@@ -3,9 +3,6 @@ import html
 import json
 
 from survival import sound, ui
-from tests import test_engine
-
-game = test_engine.game   # 게임 상태 픽스처 재사용 (몽골, 온대림, 1일차 12시, 맑음)
 
 
 def layers(state):

@@ -87,7 +87,8 @@
 - 수배도 50 이상이면 공항·항구에서 붙잡힐 수 있음
 
 ## 8. 테스트
-- `tests/test_engine.py`: 엔진 규칙과 가드 회귀 테스트. 날씨·지명은 `monkeypatch`로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
+- 주제별 테스트 파일: `test_state.py`(시간·수치·툴·턴·알림), `test_world.py`(거리·날씨·기후·지형·이벤트 조건·위험도·지식 검색·도시), `test_inventory.py`, `test_travel.py`, `test_journey.py`(목적지·단서·요청하지 않은 이동 차단), `test_crime.py`, `test_offers.py`, `test_narration.py`(GM 서술 보정), `test_scene.py`(장면·그림), `test_save.py`. 날씨·지명은 가짜로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
+- 공용: `tests/conftest.py`의 `game` 픽스처(몽골 온대림, 1일차 12시, 맑음, 초반 제한 없음)와 네트워크 차단, `tests/helpers.py`의 `fake_weather`·`call`(툴 실행)·`reply_with`(가짜 GM 응답)·`desert_noon`·`fix_roll`·`patch_everywhere`
 - `tests/test_structure.py`: `GameState`가 믹스인으로 이루어졌는지, 메서드 이름이 겹치지 않는지, 나누기 전 메서드가 모두 있는지, 믹스인이 `state`를 가져오지 않는지(순환 import).
 - **네트워크 차단(`tests/conftest.py`):** 모든 테스트에서 외부 접속을 막고, 막힌 시도가 한 번이라도 있으면 실패시킨다(날씨 조회처럼 오류를 삼키는 코드도 잡는다). 이름을 가져다 쓰는 함수를 가짜로 바꿀 때는 `tests/helpers.patch_everywhere`로 모든 `survival` 모듈을 함께 바꾼다
 - `tests/test_flags.py`: 코드에서 쓰는 `turn_flags`/`flags` 키가 `flags.py`에 모두 적혀 있고 적힌 키가 쓰이는지(오탈자 방지).

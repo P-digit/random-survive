@@ -1,9 +1,13 @@
 """테스트 도우미."""
 import importlib
+import json
 import pkgutil
 import sys
+from types import SimpleNamespace
 
 import survival
+from survival import gamemaster, state as state_module
+from survival.tools import execute_tool
 
 
 def load_all_survival_modules():
@@ -26,3 +30,32 @@ def patch_everywhere(monkeypatch, name, value):
             patched.append(module_name)
     assert patched, f"survival 모듈에서 '{name}'을(를) 찾지 못했다"
     return patched
+
+
+def fake_weather(temperature=20.0, **overrides):
+    weather = {"ok": True, "temperature": temperature, "feels_like": temperature, "humidity": 50.0,
+               "precipitation": 0.0, "wind_speed": 5.0, "is_day": True, "code": 0,
+               "description": "맑음", "emoji": "☀️", "description_en": "clear sky",
+               "elevation": 300.0, "local_hour": 12}
+    weather.update(overrides)
+    return weather
+
+
+def call(game, tool_name, **args):
+    return json.loads(execute_tool(game, tool_name, json.dumps(args)))
+
+
+def fix_roll(monkeypatch, value):
+    monkeypatch.setattr(state_module.random, "random", lambda: value)
+
+
+def desert_noon(game):
+    game.biome, game.place_type, game.start_hour, game.elapsed_hours = "desert", "야생", 13, 0
+    game.weather.update(temperature=38.0, feels_like=40.0, humidity=15.0, hourly=[])
+    game.forecast, game.diurnal = [], {}
+
+
+def reply_with(monkeypatch, *responses):
+    replies = iter(responses)
+    monkeypatch.setattr(gamemaster, "get_client",
+                        lambda: SimpleNamespace(responses=SimpleNamespace(create=lambda **k: next(replies))))

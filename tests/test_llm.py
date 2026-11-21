@@ -5,9 +5,6 @@ import pytest
 
 from survival import config, gamemaster, llm
 from survival.tools import TOOLS
-from tests import test_engine
-
-game = test_engine.game   # 게임 상태 픽스처 재사용 (네트워크 호출을 가짜로 바꾼 상태)
 
 
 class FakeMessage(SimpleNamespace):

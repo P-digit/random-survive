@@ -3,6 +3,11 @@ import socket
 
 import pytest
 
+from survival import climate, geo, state as state_module
+from survival.state import GameState
+from tests.helpers import fake_weather, patch_everywhere
+
+
 _real_connect = socket.socket.connect
 _blocked = []
 
@@ -26,3 +31,18 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
     yield
     assert not _blocked, f"외부 네트워크 접속 시도(가짜로 바꾸지 않은 호출): {_blocked[:3]}"
+
+
+@pytest.fixture
+def game(monkeypatch):
+    """네트워크 호출을 모두 가짜로 바꾼 게임 상태 (몽골 초원에서 시작)."""
+    patch_everywhere(monkeypatch, "get_weather", lambda lat, lon: fake_weather())   # state, travel, ...
+    monkeypatch.setattr(geo, "reverse_geocode", lambda lat, lon: {"name": "테스트 지역"})
+    monkeypatch.setattr(geo, "is_land", lambda lat, lon: True)
+    monkeypatch.setattr(state_module, "EARLY_GAME_HOURS", 0)   # 대부분의 테스트는 초반 제한 없이 (따로 테스트함)
+    monkeypatch.setattr(state_module.climate_api, "get_climate",
+                        lambda lat, lon, weather, today=None: climate.make_climate("temperate", lat, 7))
+    lat, lon = 46.9, 103.8
+    distance = geo.distance_to_korea(lat, lon)
+    return GameState(lat=lat, lon=lon, place_name="몽골", weather=fake_weather(), biome="forest",
+                     start_distance=distance, distance=distance)
