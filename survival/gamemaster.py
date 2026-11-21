@@ -715,6 +715,9 @@ def collect_notices(state):
         notices.append({"kind": "good" if bought.get("sponsored") else "info",
                         "title": f"🎫 {'귀국 항공권 확보' if bought.get('sponsored') else '예약 완료'} — {bought['item']}",
                         "text": paid + " 표는 탈 때까지 유지됩니다."})
+    from .achievements import TITLES
+    for key in flags.get("achievements") or []:
+        notices.append({"kind": "good", "title": f"🏆 업적 — {TITLES[key][0]}", "text": TITLES[key][1]})
     economy = flags.get("economy") or {}
     if economy.get("kind") == "work":
         notices.append({"kind": "good", "title": f"💼 일 — {economy['job']} {economy['hours']:g}시간, +${economy['amount']:,.0f}",

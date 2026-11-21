@@ -10,12 +10,13 @@ import inspect
 
 import gradio as gr
 
-from survival import imagegen, risk_model, savegame
+from survival import achievements, imagegen, risk_model, savegame
 from survival.config import IMAGES_SUPPORTED, LLM_MODEL, REDRAW_DISTANCE_KM
 from survival.llm import describe_provider, missing_key_message
 from survival.gamemaster import get_client, run_turn
 from survival.state import create_game
 from survival.weather import weather_category
+from survival.achievements import run_summary
 from survival.sound import soundscape, turn_sfx
 from survival.ui import (CSS, INTRO_MESSAGE, TITLE_HTML, render_hud, render_location,
                          render_notices, render_sound_cue, sound_head, turn_summary)
@@ -171,6 +172,8 @@ def play(message, state, use_image):
     try:
         reply = run_turn(state, message)
         reply = render_notices(state.notices) + reply + turn_summary(state)
+        if state.status != "playing":
+            reply += "\n\n" + run_summary(state)          # 게임이 끝났다: 이번 판의 결산과 업적
     except Exception as e:
         reply = f"⚠️ 오류가 발생했습니다. 다시 시도해 주세요. ({e})"
     state.chat = state.chat + [{"role": "assistant", "content": reply}]
@@ -243,6 +246,7 @@ if __name__ == "__main__":
     if args.share:
         # 접속자들이 저장 파일 하나를 함께 쓰면 서로의 게임을 덮어쓰게 되므로, 공유 중에는 저장을 끈다
         savegame.ENABLED = False
+        achievements.HALL_ENABLED = False      # 명예의 전당도 접속자들이 함께 쓰게 되므로 끈다
         print("🌐 공유 모드: 아래 'public URL' 주소를 전달하세요. 이 프로그램이 켜져 있는 동안만 접속됩니다.")
         print("   공유 모드에서는 자동 저장/이어하기가 꺼지고, 접속자 모두가 이 컴퓨터의 API 키를 사용합니다.")
     demo, launch_kwargs = build_app()

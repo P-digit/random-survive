@@ -120,6 +120,7 @@ def turn_sfx(state):
     nonce = f"{state.turn}:{state.elapsed_hours:g}:{state.lat:.4f}:{state.lon:.4f}:{state.status}"
     if state.status == "won":
         return {"events": ["win"], "nonce": nonce}
+    trophy = ["discover"] if (state.turn_flags or {}).get("achievements") else []
     if state.status == "dead":
         return {"events": ["death"], "nonce": nonce}
 
@@ -164,4 +165,4 @@ def turn_sfx(state):
     if flags.get("offer_declined") or flags.get("offer_expired") or \
             (flags.get("pre_offer") or {}).get("kind") == "redo":
         events.append("dismiss")
-    return {"events": list(dict.fromkeys(events))[:MAX_SFX], "nonce": nonce}
+    return {"events": (trophy + list(dict.fromkeys(events)))[:MAX_SFX], "nonce": nonce}

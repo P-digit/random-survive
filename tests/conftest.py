@@ -46,3 +46,10 @@ def game(monkeypatch):
     distance = geo.distance_to_korea(lat, lon)
     return GameState(lat=lat, lon=lon, place_name="몽골", weather=fake_weather(), biome="forest",
                      start_distance=distance, distance=distance)
+
+
+@pytest.fixture(autouse=True)
+def private_hall_of_fame(monkeypatch, tmp_path):
+    """업적의 '명예의 전당' 파일을 테스트마다 임시 폴더에 둔다 (실제 saves/ 에 쓰지 않는다)."""
+    from survival import achievements
+    monkeypatch.setattr(achievements, "HALL_PATH", tmp_path / "hall_of_fame.json")
