@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 181개: 엔진 142 + LLM 어댑터 17 + 소리 22)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 195개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -20,7 +20,13 @@
 | 모듈 | 책임 |
 |---|---|
 | `app.py` | Gradio 화면 구성, 새 게임/이어하기, 턴 실행(`play`), 장면 그림 갱신 여부 판단 |
-| `survival/state.py` | `GameState` 데이터클래스와 모든 게임 규칙: 시간 흐름, 생체 수치, 소지품, 이동·여정, 기회(offer), 범죄·수배·체포, 단서, 장면, 턴 시작/종료 |
+| `survival/state.py` | `GameState` 데이터클래스(모든 필드)와 공통 규칙: 시간 흐름, 생체 수치, 날씨·기후, 장면·인물, 단서와 사실, 턴 시작/종료, `create_game`. 아래 믹스인 5개를 상속한다 |
+| `survival/inventory.py` | `InventoryMixin`: 소지품 넣고 빼기, 먹고 마시기(용량·일부만 마시기), 돈 쓰기. 소지품 판정 함수(`item_core`, `consumable_effect` 등) |
+| `survival/crime.py` | `CrimeMixin`: 자유 행동 판정, 범죄 기록·목격·수배도, 원한을 가진 사람, 체포 |
+| `survival/travel.py` | `TravelMixin`: 이동 수단(`travel`), 요금·표, 탈것과 운전, 새 장소 도착(`arrival_place`) |
+| `survival/journey.py` | `JourneyMixin`: 목적지로 가기(`go_to`), 여러 턴 여정, 공관·공항, 귀국 지원 |
+| `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
+| `survival/util.py` | `clamp` 등 여러 모듈이 함께 쓰는 작은 도구 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
 | `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
 | `survival/tools.py` | GM이 호출하는 툴 스키마(`TOOLS`)와 실행(`execute_tool`), 툴 남용·요청하지 않은 행동 차단 가드, 기회 수락/되풀이 판정(`offer_action`) |
@@ -34,6 +40,7 @@
 | `survival/knowledge.py` | 생존 지식 RAG(`data/survival_guide.txt`) |
 | `survival/imagegen.py` | 장면 그림 생성·편집 지시문, Vision으로 그림 읽기, 새로 생긴 구조물 검사 |
 | `survival/languages.py` | 나라별 표지판 언어(151개국) |
+| `survival/flags.py` | `turn_flags`·`flags` 키 목록(TypedDict)과 뜻 |
 | `survival/sound.py` | 게임 상태 → 배경 소리 층별 크기(0~1), 이번 턴의 사건 효과음 선택. 화면과 분리된 순수 함수 (10장) |
 | `survival/static/sound.js` | 브라우저 소리 엔진. Web Audio로 합성하고, 상태창의 소리 신호가 바뀌면 층별 크기를 바꿈 |
 | `survival/ui.py` | CSS, HUD(상태창) HTML, 알림 상자, 턴 요약 |
@@ -50,7 +57,7 @@
 - **이야기 정합성:** `leads`(단서), `facts`(확정 사실), `characters`, `scene_*`(현재 장면), `journey`(여러 턴 이동)
 - **기회:** `offer`(진행 중), `expired_offers`, `done_offers`(받아들이거나 거절해 끝난 기회. 재등장·되풀이 차단용)
 - **범죄:** `wanted`(0~100), `crime_scene`, `enemies`, `notorious`, `stolen_items`
-- **턴 임시값:** `turn_flags`, `delta`, `notices`, `event`
+- **턴 임시값:** `turn_flags`(`TurnFlags`), `delta`, `notices`, `event`. 장소의 사정은 `flags`(`PlaceFlags`). 두 dict의 키 목록과 뜻은 `survival/flags.py`에 있고, 새 키는 거기 먼저 적는다(`tests/test_flags.py`가 코드의 모든 키를 AST로 모아 대조)
 - **상태 머신:** `status` = `playing` → `won`(서울 60km 이내) | `dead`(체력 0, `death_reason`)
 - **분리 계획(`refactor/state-split`):** 기회 필드·메서드(`offer`, `*_offers`, `accept_offer` 등) → 기회 모듈, 여정(`journey`, `go_to`, `_advance_journey` 등) → 여정 모듈, 범죄(`wanted`, `crime_scene`, `enemies`, `notorious`, `stolen_items`, `attempt`, `arrest` 등) → 범죄 모듈. `GameState`는 데이터와 턴 경계(`begin_turn`/`end_turn`)만 남긴다. 저장 파일(`savegame`) 호환을 위해 필드 이름은 유지한다
 
@@ -60,6 +67,9 @@
 3. GM 호출(Responses API, `previous_response_id`로 멀티턴). 대화를 잃으면 `make_recap`으로 새 대화를 시작
 4. 툴 루프(최대 `MAX_TOOL_ROUNDS`=5): `execute_tool` → 결과 전달 → 재호출
 5. 엔진 사후 보정: `guard_unrequested_move`, `auto_decline`, `auto_consume`, `auto_eat`, `settle_consumption`, `auto_charge`, `auto_money`
+   - **서술 속의 돈(`money_mentions`):** 서술을 문장 단위로 읽어 금액마다 방향을 정한다. 금액 뒤 가장 가까운 동사로 받음·냄·잃음·훔침을 가리고, 뒤에 '겠·기로·수 있'이 붙으면 약속으로 무시한다. '건네(주)'는 앞에 받는 쪽 표시(당신에게·수고비·일당·보수·여비 등)가 있으면 받음, 다른 사람'에게'면 냄, 둘 다 없으면 모름. `auto_charge`는 냄, `auto_money`는 잃음·받음(범죄 의도가 없으면 훔침 제외)을 엔진이 돈을 움직이지 않았을 때만 반영한다
+   - **`auto_eat`(GM이 먹고 마시기를 처리하지 않았을 때):** 입력에 나온 소지품을 먹은 것으로 처리한다. 이름이 여럿 걸리면 더 구체적인(긴) 이름을 고르고, 입력이 개울·강·샘·우물·빗물 같은 바깥의 물을 가리키면 가진 물을 대신 쓰지 않는다(그 물이 소지품에 있으면 그것을 쓴다)
+   - **돈 알림(`money_notices`):** GM 툴(`pay`, `update_status`)로 움직인 돈은 `turn_flags.money_log`에 이유와 함께 남고, 그 금액이 서술에 없으면 "💸 지출 -$50 — 이유" / "💵 수입" 알림을 띄운다
 6. `state.end_turn()`: GM이 시간을 흘리지 않았으면 입력으로 추정(`estimate_time`), 지난 기회 만료(제안은 나온 다음 턴까지만 유효), 사망·귀환 판정
 7. 서술 보정: `ensure_korean` → `ensure_scene` → `ensure_vitals` → `enforce_redo`
 8. 추천 행동 3개 확정(기회가 살아 있으면 1번은 '받아들이기')
@@ -75,12 +85,18 @@
 - 먹고 마시기: `CONSUMABLES` 표의 기본 회복량을 엔진이 보장(`settle_consumption`). 용량이 적힌 마실 것은 용량에 비례(`HYDRATION_PER_LITER`=45/L). "조금·한 모금·아껴·반만" 마시면 `sip_item`이 용량만 줄인다(`SIP_ML`=250ml, 반은 절반). 일부만 마신 턴에는 GM이 준 수분을 마신 양만큼으로, 용량이 적힌 물을 다 마신 턴에는 기본 회복량의 `MEASURED_DRINK_SLACK`(1.2)배로 깎는다(강물·음식처럼 용량을 모르는 것이 섞이면 GM을 따른다)
 - 판정 성공률: easy 0.85 / normal 0.60 / hard 0.35 / very_hard 0.15
 - 초반 `EARLY_GAME_HOURS`=36시간 동안은 마을까지만 이동(최대 60km)
-- 한 턴 이동 최대 `JOURNEY_MAX_HOURS`=10시간, 넘으면 `journey`로 다음 턴에 이어감
+- 이동은 두 가지다. 수단·거리를 정한 이동(`travel` 툴)은 `TRAVEL_RULES`의 최대 거리 안에서 한 턴에 끝난다. 목적지를 말한 이동(`go_to` 툴, `journey`)은 한 턴에 최대 `JOURNEY_MAX_HOURS`=10시간씩 가고, 남으면 다음 턴에 이어간다
 - 대형 이벤트 확률 0.10, 8턴 동안 없으면 확정 발생
 - 수배도 50 이상이면 공항·항구에서 붙잡힐 수 있음
 
 ## 8. 테스트
-- `tests/test_engine.py`: 엔진 규칙과 가드 회귀 테스트. 날씨·지명은 `monkeypatch`로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
+- 주제별 테스트 파일: `test_state.py`(시간·수치·툴·턴·알림), `test_world.py`(거리·날씨·기후·지형·이벤트 조건·위험도·지식 검색·도시), `test_inventory.py`, `test_travel.py`, `test_journey.py`(목적지·단서·요청하지 않은 이동 차단), `test_crime.py`, `test_offers.py`, `test_narration.py`(GM 서술 보정), `test_scene.py`(장면·그림), `test_save.py`. 날씨·지명은 가짜로, GM 응답은 가짜 클라이언트(`SimpleNamespace`)로 대체해 네트워크 없이 실행한다.
+- 공용: `tests/conftest.py`의 `game` 픽스처(몽골 온대림, 1일차 12시, 맑음, 초반 제한 없음)와 네트워크 차단, `tests/helpers.py`의 `fake_weather`·`call`(툴 실행)·`reply_with`(가짜 GM 응답)·`desert_noon`·`fix_roll`·`patch_everywhere`
+- `tests/test_structure.py`: `GameState`가 믹스인으로 이루어졌는지, 메서드 이름이 겹치지 않는지, 나누기 전 메서드가 모두 있는지, 믹스인이 `state`를 가져오지 않는지(순환 import).
+- **네트워크 차단(`tests/conftest.py`):** 모든 테스트에서 외부 접속을 막고, 막힌 시도가 한 번이라도 있으면 실패시킨다(날씨 조회처럼 오류를 삼키는 코드도 잡는다). 이름을 가져다 쓰는 함수를 가짜로 바꿀 때는 `tests/helpers.patch_everywhere`로 모든 `survival` 모듈을 함께 바꾼다
+- `tests/test_flags.py`: 코드에서 쓰는 `turn_flags`/`flags` 키가 `flags.py`에 모두 적혀 있고 적힌 키가 쓰이는지(오탈자 방지).
+- `tests/test_llm.py`: LLM 공급자 어댑터. `tests/test_sound.py`: 배경 소리·효과음(node가 있으면 `tests/js/sound_harness.js`로 sound.js를 가짜 브라우저에서 실행).
+- **CI:** `.github/workflows/tests.yml`이 PR과 main 푸시마다 Python 3.11 + Node 20에서 `node --check`와 `pytest`를 돌린다. API 키·비밀 값은 쓰지 않는다. 키·캐시(`models/` 등)가 없는 깨끗한 체크아웃에서도 통과한다(위험도 모델은 처음에 자동 학습)
 
 ## 9. LLM 공급자 (`survival/llm.py`, `survival/config.py`)
 - **고르기:** `.env`의 `LLM_PROVIDER`(openai/gemini). 없으면 키가 있는 쪽, 둘 다 있으면 OpenAI (`config.choose_provider`)
