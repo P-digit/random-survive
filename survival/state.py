@@ -16,6 +16,7 @@ from .config import (ARRIVAL_RADIUS_KM, ATTEMPT_CHANCE, ATTEMPT_FAIL_DAMAGE, CON
                      VITALS_DRAIN)
 from .events import (BIOME_HAZARDS, BIOMES, OFFER_DONE, OFFER_EXIT, PERSISTENT_OFFERS, classify_biome, roll_event,
                      roll_major_event)
+from .flags import PlaceFlags, TurnFlags
 from .risk_model import predict_risk
 from .weather import get_weather, weather_category
 
@@ -163,7 +164,7 @@ class GameState:
     offer: dict | None = None         # 진행 중인 대형 이벤트(기회). 다음 턴까지 유효
     last_major_turn: int = 0
     image_weather: str = ""           # 현재 장면 이미지가 그려진 날씨 분류
-    turn_flags: dict = field(default_factory=dict)   # 이번 턴에 한 일 (툴 남용 방지용)
+    turn_flags: TurnFlags = field(default_factory=dict)   # 이번 턴에 일어난 일. 키 목록은 flags.py
     # 현재 장면: 플레이어가 지금 서 있는 구체적인 곳 (이미지와 이벤트 판정에 쓰인다)
     scene_setting: str = "outdoor"    # outdoor / indoor
     scene_place: str = ""             # 예: "빈 오두막 안", "버스 터미널", "강가"
@@ -183,7 +184,7 @@ class GameState:
     leads: list = field(default_factory=list)            # [{id, kind, label, clue, target, km, bearing, ...}]
     lead_seq: int = 0
     facts: list = field(default_factory=list)            # [{text, scope: here/always, turn}]
-    flags: dict = field(default_factory=dict)            # on_road, can_call, embassy_visited, at_airport, at_embassy
+    flags: PlaceFlags = field(default_factory=dict)      # 지금 장소의 사정. 키 목록은 flags.py
     characters: list = field(default_factory=list)       # 이 장소에서 만난 인물 [{name, role, look}]
     journey: dict | None = None       # 여러 턴에 걸친 목적지 이동 {type, name, label, lat, lon, place}
     recent_inputs: list = field(default_factory=list)    # 최근 플레이어 입력 (범죄 의도의 맥락 판단용)
