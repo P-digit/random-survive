@@ -3,7 +3,7 @@ import random
 import re
 
 from . import geo, leads as leads_api, places
-from .config import EARLY_MAX_TRAVEL_KM
+from .config import AIRPORT_OPEN_DAY, EARLY_MAX_TRAVEL_KM
 from .events import OFFER_DONE, OFFER_EXIT, PERSISTENT_OFFERS
 from .util import clamp
 
@@ -87,7 +87,7 @@ class OfferMixin:
         # 공항: 바로 한국으로 갈 수 있는 곳이라 초반에는 나오지 않는다.
         # 공관을 다녀왔거나(서류·지원금 확보) 충분히 오래 버틴 뒤, 도시에 있을 때만 나온다.
         if self.place_type == "도시" and not self.flags.get("at_airport") and \
-                (self.flags.get("embassy_visited") or self.day >= 5):
+                (self.flags.get("embassy_visited") or self.day >= AIRPORT_OPEN_DAY):
             needs.append("airport")
         return tuple(needs)
 

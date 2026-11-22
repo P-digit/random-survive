@@ -51,6 +51,7 @@ class TurnFlags(TypedDict, total=False):
     police: dict                  # 경찰 {phase: spotted(등장)/resolved(대응 판정), who, action, outcome, chance, effects}
     laying_low: bool              # 플레이어가 숨어 지낸다 (수배도가 더 빨리 내려간다)
     economy: dict                 # 일·판매·숙소·도박 결과 {kind: work/sell/room/gamble, amount, ...}
+    border: dict                  # 자기 탈것으로 국경을 넘음 {from, to, stopped(경비대와 마주침)}
 
 
 class PlaceFlags(TypedDict, total=False):

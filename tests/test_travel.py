@@ -99,7 +99,9 @@ def test_drive_runs_out_of_fuel_and_blocks_at_sea(game, monkeypatch):
     game.begin_turn()
     game.vehicle = {"kind": "car", "name": "낡은 승용차", "speed": 70, "range_km": 100, "sea": False, "stolen": False}
     out = call(game, "travel", method="drive", distance_km=500)
-    assert out["success"] and game.vehicle is None and "연료" in out["message"]
+    assert out["success"] and game.vehicle["range_km"] == 0 and "멈춰 섰다" in out["message"]   # 탈것은 남는다
+    game.begin_turn()
+    assert "연료가 바닥났다" in call(game, "travel", method="drive", distance_km=50)["message"]
 
     game.begin_turn()
     game.vehicle = {"kind": "car", "name": "차", "speed": 70, "range_km": 300, "sea": False, "stolen": False}

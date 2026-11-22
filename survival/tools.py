@@ -1,8 +1,9 @@
 """게임 마스터(LLM)가 호출할 수 있는 툴 목록과 실제 실행 함수."""
 import json
+import re
 
 from . import knowledge
-from .config import CRIMES, MEASURED_DRINK_SLACK, TRAVEL_RULES
+from .config import CRIMES, MEASURED_DRINK_SLACK, TRAVEL_RULES, VEHICLES
 
 
 def _function(name, description, properties):
@@ -212,13 +213,28 @@ TOOLS = [
     ),
     _function(
         "acquire_vehicle",
-        "플레이어가 탈것(차·트럭·오토바이·보트)을 손에 넣었을 때 호출한다. 같은 턴에 attempt_action 이 성공했어야 한다 "
+        "플레이어가 탈것(차·트럭·오토바이·보트·자전거·말/낙타·경비행기)을 손에 넣었을 때 호출한다. 같은 턴에 attempt_action 이 성공했어야 한다 "
         "(탈취, 훔치기, 흥정해서 사기 등). 이후 플레이어는 travel(method='drive') 로 직접 몰고 이동할 수 있다. "
         "장면에 실제로 있던 탈것만 얻을 수 있다.",
         {
-            "kind": {"type": "string", "enum": ["car", "truck", "motorbike", "boat"], "description": "탈것 종류"},
+            "kind": {"type": "string", "enum": ["car", "truck", "motorbike", "boat", "bicycle", "animal", "plane"],
+                     "description": "탈것 종류 (animal: 말·낙타·당나귀 등 탈 수 있는 동물, plane: 경비행기)"},
             "name": {"type": "string", "description": "짧은 한국어 이름. 예: '낡은 화물 트럭'"},
         },
+    ),
+    _function(
+        "buy_vehicle",
+        "탈것을 정가에 산다(흥정·판정 없이). 자전거 $40, 말 $150(마을), 오토바이 $350, 보트 $900, 승용차 $1,200, "
+        "트럭 $2,000(도시), 경비행기 $15,000(도시). 연료가 가득 찬 상태로 받는다. 플레이어가 사겠다고 할 때만.",
+        {
+            "kind": {"type": "string", "enum": ["car", "truck", "motorbike", "boat", "bicycle", "animal", "plane"], "description": "탈것 종류"},
+            "name": {"type": "string", "description": "짧은 한국어 이름. 예: '중고 오토바이'"},
+        },
+    ),
+    _function(
+        "refuel",
+        "플레이어의 탈것에 연료를 채운다(마을·도시, 경비행기는 도시). 값은 엔진이 정한다. 자전거·말은 연료가 없다.",
+        {},
     ),
     _function(
         "arrest",
@@ -455,6 +471,20 @@ def redo_problem(state, name, args):
             "이미 끝났다는 것을 서술하라.")
 
 
+# 자기 탈것을 타고 간다는 말: 탈것을 가리키는 말 + 이동 동사가 함께 있으면 된다
+# ("오토바이를 타고 한국 쪽으로 달린다"처럼 사이에 말이 끼어도)
+DRIVE_VERBS = re.compile(r"타고|몰고|몰아|달린|달려|달리|운전|날아|비행|간다|가자|갈게|출발|떠난")
+VEHICLE_NOUNS = ("차", "트럭", "오토바이", "바이크", "보트", "배", "자전거", "말", "낙타", "당나귀", "비행기", "경비행기")
+
+
+def drive_requested(state, text):
+    if not state.vehicle:
+        return False
+    v = state.vehicle
+    nouns = set(VEHICLE_NOUNS) | {VEHICLES[v["kind"]]["label"]} | {w for w in str(v["name"]).split() if len(w) >= 2}
+    return any(n.replace(" ", "") in text for n in nouns) and bool(DRIVE_VERBS.search(text))
+
+
 def player_asked_for(state, name, args):
     """GM이 이동 툴을 쓸 때, 플레이어가 정말 그곳으로 가겠다고 했는지. (플레이어 입력이 없으면 허용)"""
     text = (state.turn_flags.get("player_text") or "").replace(" ", "")
@@ -465,7 +495,9 @@ def player_asked_for(state, name, args):
         return any(w.replace(" ", "") in text for w in words)
     if name == "travel":
         words = TRAVEL_WORDS.get(str(args.get("method", "")), ())
-        return any(w.replace(" ", "") in text for w in words)
+        if any(w.replace(" ", "") in text for w in words):
+            return True
+        return str(args.get("method", "")) == "drive" and drive_requested(state, text)
     if name == "accept_offer":
         if not state.offer:
             return True                  # 받아들일 제안이 없으면 accept_offer 가 '이미 지나갔다'고 알려 준다
@@ -556,6 +588,10 @@ def execute_tool(state, name, arguments, client=None):
             result = state.gamble(args.get("stake", 0), str(args.get("game", "")))
         elif name == "acquire_vehicle":
             result = state.acquire_vehicle(args.get("kind"), args.get("name", ""))
+        elif name == "buy_vehicle":
+            result = state.buy_vehicle(args.get("kind"), args.get("name", ""))
+        elif name == "refuel":
+            result = state.refuel()
         elif name == "arrest":
             result = state.arrest(str(args.get("reason", "")))
         elif name == "buy_ticket":
