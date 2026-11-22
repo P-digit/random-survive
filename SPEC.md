@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 200개)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 219개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -26,6 +26,7 @@
 | `survival/travel.py` | `TravelMixin`: 이동 수단(`travel`), 요금·표, 탈것과 운전, 새 장소 도착(`arrival_place`) |
 | `survival/journey.py` | `JourneyMixin`: 목적지로 가기(`go_to`), 여러 턴 여정, 공관·공항, 귀국 지원 |
 | `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
+| `survival/police.py` | `PoliceMixin`: 수배 단계(★1~5), 경찰 등장(`roll_police`), 대응 판정(`respond_to_police`), 은신(`lay_low`), 변장. 입력 → 대응 종류(`classify_response`) (11장) |
 | `survival/util.py` | `clamp` 등 여러 모듈이 함께 쓰는 작은 도구 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
 | `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
@@ -56,7 +57,8 @@
 - **환경:** `weather`, `forecast`, `climate`, `risk`
 - **이야기 정합성:** `leads`(단서), `facts`(확정 사실), `characters`, `scene_*`(현재 장면), `journey`(여러 턴 이동)
 - **기회:** `offer`(진행 중), `expired_offers`, `done_offers`(받아들이거나 거절해 끝난 기회. 재등장·되풀이 차단용)
-- **범죄:** `wanted`(0~100), `crime_scene`, `enemies`, `notorious`, `stolen_items`
+- **범죄:** `wanted`(0~100, ★단계는 `police.heat_stage`), `crime_scene`, `enemies`, `notorious`, `stolen_items`
+- **경찰:** `pursuit`(마주친 경찰 {stage, turn, who, kind: check/chase}), `disguise`({until, how})
 - **턴 임시값:** `turn_flags`(`TurnFlags`), `delta`, `notices`, `event`. 장소의 사정은 `flags`(`PlaceFlags`). 두 dict의 키 목록과 뜻은 `survival/flags.py`에 있고, 새 키는 거기 먼저 적는다(`tests/test_flags.py`가 코드의 모든 키를 AST로 모아 대조)
 - **상태 머신:** `status` = `playing` → `won`(서울 60km 이내) | `dead`(체력 0, `death_reason`)
 - **분리 계획(`refactor/state-split`):** 기회 필드·메서드(`offer`, `*_offers`, `accept_offer` 등) → 기회 모듈, 여정(`journey`, `go_to`, `_advance_journey` 등) → 여정 모듈, 범죄(`wanted`, `crime_scene`, `enemies`, `notorious`, `stolen_items`, `attempt`, `arrest` 등) → 범죄 모듈. `GameState`는 데이터와 턴 경계(`begin_turn`/`end_turn`)만 남긴다. 저장 파일(`savegame`) 호환을 위해 필드 이름은 유지한다
@@ -123,3 +125,12 @@
 - **한 번만 울리기:** 신호의 `sfx = {events, nonce}`. nonce(턴·경과 시간·좌표·상태)가 바뀔 때만 울리므로, 같은 턴의 화면 갱신(진행 중 표시, 그림 갱신)에는 다시 울리지 않는다. 페이지를 연 직후 처음 받은 신호는 울리지 않고, 이어하기 화면은 `view(quiet=True)`로 빈 목록을 보낸다(저장된 마지막 턴의 소리를 다시 울리지 않게)
 - **합성:** `sound.js`의 `SFX` 표(음표·노이즈 스윕·북소리). 효과음은 실내 필터를 거치지 않는 별도 경로(`sfxBus`)로 나간다. 소리를 꺼 두면 울리지 않는다
 - **다른 탭:** `visibilitychange`로 숨겨지면 AudioContext를 멈추고, 돌아오면(소리가 켜져 있으면) 다시 켠다. 숨겨진 동안 온 효과음은 울리지 않는다
+
+## 11. 경찰과 추격 (`survival/police.py`)
+- **흐름(기회와 같은 방식):** `begin_turn`이 경찰 등장을 굴린다(`roll_police`, 이미 마주친 경찰이 있으면 굴리지 않음). 등장한 턴에는 GM이 "경찰이 다가오는 장면"까지만 서술하고(GM의 `arrest`는 막힘), **다음 턴의 플레이어 입력을 GM 호출 전에 엔진이 판정**한다(`gamemaster.resolve_police` → `respond_to_police`). GM은 `[경찰 대응 결과]`를 받아 서술만 하고, 그 턴에는 `attempt_action`·`arrest`가 막힌다
+- **등장 확률:** ★2/3/4/5 기본 10/20/35/50% × 장소(도시 1.0, 마을 0.6, 야생 도로 0.4, 야생 0.15) × 밤 0.7 × 변장 0.4, 훔친 차 +15%p(최대 90%). ★4 이상이거나 훔친 차면 추격(chase), 아니면 검문(check)
+- **대응 판정:** 입력의 말로 종류를 가린다(자수 > 뇌물 > 싸움 > 숨기 > 도주 > 둘러대기, 없으면 무시). 기본 확률 도주 .55 / 숨기 .50 / 뇌물 .70 / 둘러대기 .45 / 싸움 .35에서 ★마다 -6%, 보정(어둠 +10, 탈것 +15, 붐비는 도시 +5, 야생에서 숨기 +15, 변장 둘러대기 +25, ★4 이상 둘러대기 -25, 지침·부상 -15). 뇌물은 ★별 $20/40/80/150/300이 없으면 0%
+- **결과:** 따돌림 수배도 -5(극적이면 -15), 뇌물 성공 -25(실패 +10), 싸움 성공 +20·체력 -10(실패 체력 -20), 자수 `_arrest(fine_rate=0.25, wanted_cut=60, hours=12)`, 무시 75% 체포. 실패는 `_arrest`(벌금 50%, 24시간, 수배도 -40, 탈것·표·훔친 물건 압수)
+- **구금:** 12시간마다 포만감·수분을 최소 60으로 채우고, 풀려날 때 최소 40 (구금 중 굶어 죽던 문제 수정)
+- **은신·변장:** 입력에 '숨어 지내' 등이 있으면 `turn_flags.laying_low` → `pass_time`에서 수배도 감소 4배. 변장(정규식 `DISGUISE_WORDS`)은 48시간, 목격된 범죄(수배도 상승)나 체포로 풀린다
+- 알림 "🚔 경찰 — … (★)", "🏃 경찰에게서 벗어났다", 효과음(등장·체포 사이렌, 따돌림 성공음), 상태창 ★ 표시와 "변장 중"·"경찰이 쫓는 중" 배지

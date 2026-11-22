@@ -48,6 +48,8 @@ class TurnFlags(TypedDict, total=False):
     offer_declined: dict          # 기회 거절 {accept, text}
     offer_expired: dict           # 기회가 지나감 {accept, exit}
     scene_changed: bool           # 장면(set_scene)이 바뀌었다
+    police: dict                  # 경찰 {phase: spotted(등장)/resolved(대응 판정), who, action, outcome, chance, effects}
+    laying_low: bool              # 플레이어가 숨어 지낸다 (수배도가 더 빨리 내려간다)
 
 
 class PlaceFlags(TypedDict, total=False):

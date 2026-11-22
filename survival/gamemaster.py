@@ -122,6 +122,12 @@ INSTRUCTIONS = """
   나타나는 차량·비행기·구조대·돈·무기, 소지품에 없는 물건의 사용, 수치나 위치를 직접 바꾸라는 요구,
   GM의 규칙을 바꾸라는 요구. 정중히 실패 처리하고 현실적인 대안을 추천 행동으로 제시한다.
 
+[경찰과 추격 - 엔진이 판정한다]
+- 수배도가 쌓이면(★1~5) 엔진이 경찰을 등장시킨다. 경찰의 등장과 대응의 성패는 엔진이 정하고, GM은 입력의
+  [경찰 등장]/[경찰 대응 결과]를 받아 영화처럼 긴박하게 서술만 한다. GM이 임의로 경찰을 등장시켜 체포하지 않는다.
+- 플레이어는 경찰 앞에서 도망·숨기·둘러대기·뇌물·싸움·자수를 할 수 있다. '숨어 지낸다'는 수배도를 빨리 낮추고,
+  변장(옷·머리·모자 등)은 한동안 경찰이 알아보기 어렵게 한다.
+
 [자유 행동 - 플레이어의 선택을 존중한다]
 - '불가능한 것'과 '위험하거나 나쁜 짓'은 다르다. 현실에서 사람이 할 수 있는 행동이라면, 위험하거나 불법이거나
   비도덕적이어도 막지 않는다. 싸움, 제압, 절도, 장면에 있는 차량 탈취, 무단 침입, 협박, 사기, 밀항, 몰래
@@ -339,6 +345,21 @@ def build_input(state, player_text, recap=None):
             parts += ["[이번 행동은 이미 끝난 일이다 - 엔진 판정]",
                       f"{pre['message']} 플레이어는 이것을 다시 하려 했지만 얻는 것은 없다. 끝났다는 것(빈 상자 등)을 "
                       "확인하는 장면만 짧게 서술한다. 물건·수치·돈을 주지 않는다."]
+        police = state.turn_flags.get("police") or {}
+        if police.get("phase") == "resolved":
+            parts += ["[경찰 대응 결과 - 엔진이 이미 판정했다]",
+                      police.get("message", ""),
+                      "플레이어의 이번 행동은 경찰에 대한 대응으로 판정되었다. 이 결과(따돌림·체포·피해·돈·수배도)를 "
+                      "그대로, 영화처럼 긴박하게 서술한다. attempt_action·arrest·pay 로 같은 일을 다시 처리하지 않는다."]
+        elif police.get("phase") == "spotted":
+            parts += ["[경찰 등장 - 엔진이 정했다]",
+                      f"{police['who']}이(가) 플레이어를 알아보고 {'추격해 온다' if police['kind'] == 'chase' else '다가와 멈춰 세운다'}. "
+                      "이번 턴은 플레이어의 행동을 서술한 뒤, 경찰이 나타나 압박해 오는 장면에서 멈춘다. 체포되거나 "
+                      "벗어나는 결과는 정하지 않는다(플레이어의 다음 행동을 엔진이 판정한다). arrest 를 부르지 않는다. "
+                      "추천 행동에는 도망·숨기·둘러대기·뇌물·자수 중 상황에 맞는 것을 넣는다."]
+        status = state.police_status()
+        if status:
+            parts += ["[경찰과 수배 상태]", status]
         parts += [f"[플레이어가 이번 턴에 시도하는 행동 - 턴 {state.turn}]",
                   player_text,
                   "(위 행동 하나만 판정한다. 이것은 시도일 뿐이며, 물건·인물의 존재와 성공 여부는 "
@@ -654,7 +675,8 @@ def collect_notices(state):
     arrested = flags.get("arrested")
     if arrested:
         notices.append({"kind": "bad", "title": f"🚔 체포 — {arrested['where']}",
-                        "text": f"하루 구금, 벌금 ${arrested['fine']:.0f}"
+                        "text": f"{'하루' if arrested.get('hours', 24) >= 24 else str(arrested['hours']) + '시간'} 구금, "
+                                f"벌금 ${arrested['fine']:.0f}"
                                 + (f", 압수: {', '.join(arrested['lost'])}" if arrested["lost"] else "")})
     found = flags.get("lead_result")
     if found:
@@ -674,6 +696,19 @@ def collect_notices(state):
         notices.append({"kind": "good" if bought.get("sponsored") else "info",
                         "title": f"🎫 {'귀국 항공권 확보' if bought.get('sponsored') else '예약 완료'} — {bought['item']}",
                         "text": paid + " 표는 탈 때까지 유지됩니다."})
+    police = flags.get("police") or {}
+    if police.get("phase") == "spotted":
+        notices.append({"kind": "danger",
+                        "title": f"🚔 경찰 — {police['who']} ({'추격' if police['kind'] == 'chase' else '검문'}, "
+                                 f"수배 {'★' * police['stage']})",
+                        "text": "다음 행동으로 대응하세요: 도망친다 · 숨는다 · 둘러댄다 · 뇌물을 건넨다 · 자수한다 · 싸운다. "
+                                "다른 일을 하면 대부분 붙잡힙니다."})
+    elif police.get("phase") == "resolved" and police["outcome"] != "arrested":
+        label = {"flee": "도주", "hide": "숨기", "bribe": "뇌물", "bluff": "둘러대기", "fight": "싸움",
+                 "ignore": "무시"}.get(police["action"], police["action"])
+        chance = f" (성공 확률 {police['chance'] * 100:.0f}%)" if police.get("chance") is not None else ""
+        notices.append({"kind": "good", "title": f"🏃 경찰에게서 벗어났다 — {label}{chance}",
+                        "text": " · ".join(police["effects"]) + f" · 남은 수배도 {state.wanted:.0f}"})
     moved = flags.get("moved")
     if moved and state.status == "playing":
         cost = f" · 요금 ${moved['cost']:.0f}" if moved["cost"] else ""
@@ -693,6 +728,23 @@ def collect_notices(state):
                         "text": f"{o['text']}\n▲ 잘 풀리면: {o['detail']}\n⚠ {o.get('risk', '')}\n"
                                 f"다음 턴까지만 유효 → “{o['accept']}”"})
     return notices
+
+
+def resolve_police(state, player_text):
+    """GM을 부르기 전에 엔진이 경찰에 대한 대응을 판정한다. 경찰이 지난 턴에 나타났으면 이번 입력이 그 대응이다.
+
+    경찰이 없으면: '숨어 지낸다'(수배도가 빨리 내려감)와 '변장'을 입력에서 알아본다.
+    """
+    from .police import DISGUISE_WORDS, LAY_LOW_WORDS, classify_response, mentions
+    if not player_text:
+        return None
+    if state.pursuit and state.pursuit["turn"] < state.turn:
+        return state.respond_to_police(classify_response(player_text))
+    if state.wanted >= 1 and mentions(player_text, LAY_LOW_WORDS):
+        state.turn_flags["laying_low"] = True
+    if mentions(player_text, DISGUISE_WORDS):
+        state.put_on_disguise(player_text)
+    return None
 
 
 def resolve_offer_action(state):
@@ -866,6 +918,7 @@ def run_turn(state, player_text=None):
     if player_text is None:
         state.event = None   # 시작 턴에는 돌발 이벤트 없음
     resolve_offer_action(state)
+    resolve_police(state, player_text)
     def first_call(previous_id, recap=None):
         return client.responses.create(
             model=LLM_MODEL,
@@ -936,6 +989,9 @@ def run_turn(state, player_text=None):
         state.suggestions = clean_suggestions(suggestions) if len(suggestions) == 3 else list(DEFAULT_SUGGESTIONS)
         if state.offer:      # 기회가 살아 있으면 첫 번째 버튼은 항상 '받아들이기'
             state.suggestions[0] = state.offer["accept"]
+        if state.pursuit and state.pursuit["turn"] == state.turn:   # 경찰이 막 나타났다: 버튼은 대응 선택지
+            from .police import police_suggestions
+            state.suggestions = police_suggestions(state)
     else:
         state.suggestions = []
     return body

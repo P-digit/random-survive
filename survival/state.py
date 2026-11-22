@@ -13,6 +13,7 @@ from .flags import PlaceFlags, TurnFlags
 from .inventory import InventoryMixin
 from .journey import JourneyMixin
 from .offers import OfferMixin
+from .police import PoliceMixin
 from .risk_model import predict_risk
 from .travel import TravelMixin
 from .util import clamp
@@ -20,7 +21,7 @@ from .weather import get_weather, weather_category
 
 
 @dataclass
-class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixin):
+class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixin, PoliceMixin):
     lat: float
     lon: float
     place_name: str
@@ -90,7 +91,9 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
     done_offers: list = field(default_factory=list)      # 받아들이거나 거절해 끝난 기회 [{id, accept, how, turn, lat, lon, note}]
     image_scene: str = ""             # 지금 그림이 그려진 장면 (장소+장면 이름)
     image_night: bool = False         # 지금 그림이 밤 그림인지
-    wanted: float = 0.0               # 수배도 0~100
+    wanted: float = 0.0               # 수배도 0~100 (★단계는 police.heat_stage)
+    pursuit: dict | None = None       # 지금 마주친 경찰 {stage, turn, who, kind: check/chase} — 다음 턴 입력으로 판정
+    disguise: dict = field(default_factory=dict)   # 변장 {until(경과 시간), how}
     _snapshot: dict = field(default_factory=dict)
 
     # ---------- 시간 ----------
@@ -328,6 +331,8 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
                 self.health = clamp(self.health - damage * h)
             self.elapsed_hours += h
             self.wanted = max(0.0, self.wanted - WANTED_DECAY_PER_HOUR * h)
+            if self.turn_flags.get("laying_low"):
+                self.lay_low(h)                    # 숨어 지내면 수배도가 더 빨리 내려간다
             self._check_death("탈수·굶주림·혹독한 환경을 버티지 못했다")
         self.sync_weather()
         self.time_passed_this_turn = True
@@ -490,10 +495,8 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
             reaction = "사람들이 당신을 알아보고 수군거린다. 누군가 경찰을 부르러 달려간다."
         if reaction:
             self.event = {"kind": "danger", "text": reaction}
-        elif self.place_type in ("마을", "도시") and self.wanted >= 20 and random.random() < self.wanted / 150:
-            self.event = {"kind": "danger",
-                          "text": "경찰이 수배 전단 속 얼굴과 당신을 번갈아 보더니 다가온다."
-                                  + (" 당신이 몰고 온 차량도 신고된 것이다." if self.vehicle and self.vehicle.get("stolen") else "")}
+        else:
+            self.roll_police()                     # 수배 ★2 이상이면 경찰이 나타날 수 있다 (대응은 다음 턴에 판정)
         # 대형 이벤트(기회): 확률로 발생하고, 오래 안 나오면 반드시 나온다
         waited = self.turn - self.last_major_turn
         if self.offer is None and self.turn >= 3 and not reaction and (
@@ -545,7 +548,7 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
             "환경위험": self.hazard["desc"] if self.place_type == "야생" else "없음 (사람 사는 곳)",
             "보유_탈것": (f"{self.vehicle['name']} (연료로 약 {self.vehicle['range_km']}km"
                          + (", 훔친 차량" if self.vehicle.get("stolen") else "") + ")") if self.vehicle else "없음",
-            "수배도": f"{self.wanted:.0f}/100" + (" - 공항·항구 검문에서 붙잡힐 수 있음" if self.wanted >= WANTED_AIRPORT_LIMIT else ""),
+            "수배도": f"{self.wanted:.0f}/100 ({'★' * self.heat or '없음'})" + (" - 공항·항구 검문에서 붙잡힐 수 있음" if self.wanted >= WANTED_AIRPORT_LIMIT else ""),
             "초반_제한": (f"앞으로 약 {max(1, round(EARLY_GAME_HOURS - self.elapsed_hours))}시간은 도시·공항·공관으로 갈 수 "
                          "없다(마을까지만)") if self.early else "없음",
             "범죄의_여파": self.crime_aftermath() or "없음",
