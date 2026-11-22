@@ -2,7 +2,7 @@
 import json
 import re
 
-from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT
+from .config import LLM_MODEL, MAX_TOOL_ROUNDS, MONEY_GAIN_LIMIT, PLAY_STYLE
 from .llm import make_client, missing_key_message
 from .intent import crime_intent
 from .inventory import consumable_effect, item_core
@@ -220,6 +220,16 @@ INSTRUCTIONS = """
   걸어서 갈 수 없다. 걷기를 추천할 때는 "연기가 나는 쪽으로 걷는다", "강을 따라 하류로 내려간다"처럼
   눈앞의 구체적인 목표(물, 마을, 도로, 피난처)를 향한 것만 적는다.
 """
+
+CINEMATIC_NOTE = """
+[연출 - 영화처럼]
+- 이 게임은 액션 영화처럼 연출한다. 마법·SF·초능력은 여전히 불가능하지만, 사람이 해낼 수 있는 일은 극적으로
+  성공할 수 있다(지붕 위 추격, 아슬아슬한 탈출, 통쾌한 한 방, 위기의 순간의 기지).
+- 판정 결과에 '극적인 성공'이 있으면 영화의 명장면처럼 화려하고 통쾌하게, '가까스로 모면'이면 간발의 차로
+  피한 긴장감 있게 서술한다. 연출은 과장해도 엔진이 정한 결과(성패·피해·돈·수배도)는 바꾸지 않는다.
+"""
+if PLAY_STYLE == "cinematic":
+    INSTRUCTIONS += CINEMATIC_NOTE
 
 DEFAULT_SUGGESTIONS = ["주변을 살펴본다", "물과 식량을 찾는다", "사람의 흔적을 찾는다"]
 
@@ -631,7 +641,8 @@ def collect_notices(state):
         notices.append({"kind": "info", "title": f"⌛ 기회가 지나갔다 — {expired['accept']}", "text": expired["exit"]})
     attempt = flags.get("attempt")
     if attempt:
-        verdict = "성공" if attempt["success"] else "실패"
+        verdict = ("극적인 성공" if attempt.get("critical") else "성공") if attempt["success"] else \
+            ("실패 · 가까스로 모면" if attempt.get("close_call") else "실패")
         notices.append({"kind": "good" if attempt["success"] else "bad",
                         "title": f"🎲 {attempt['action']} — {verdict} (성공 확률 {attempt['chance'] * 100:.0f}%)",
                         "text": " · ".join(attempt["effects"]) or "추가 피해 없음"})

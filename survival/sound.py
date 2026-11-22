@@ -133,6 +133,8 @@ def turn_sfx(state):
     attempt = flags.get("attempt")
     if attempt:
         events.append("success" if attempt.get("success") else "fail")
+        if attempt.get("critical"):
+            events.append("lucky")                 # 극적인 성공: 반짝이는 소리를 덧붙인다
     found = flags.get("lead_result")
     if found:
         events.append("danger" if found.get("danger") else "discover")

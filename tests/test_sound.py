@@ -226,3 +226,9 @@ def test_resume_view_sends_the_turn_without_effects(game, monkeypatch):
     assert payload(loud)["sfx"]["events"] == ["success"]
     assert payload(quiet)["sfx"] == {"events": [], "nonce": payload(loud)["sfx"]["nonce"]}
     assert payload(quiet)["layers"] == payload(loud)["layers"]
+
+
+def test_critical_success_sparkles(game):
+    game.turn_flags = {"attempt": {"success": True, "critical": True}}
+    assert sfx(game) == ["success", "lucky"]
+
