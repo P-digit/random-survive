@@ -30,6 +30,8 @@ ACHIEVEMENTS = (
     ("jackpot", "잭팟", "도박에서 잭팟을 터뜨렸다", lambda st: _s(st, "jackpots") >= 1),
     ("movie_star", "영화 같은 인생", "극적인 성공을 세 번 거뒀다", lambda st: _s(st, "criticals") >= 3),
     ("collector", "탈것 수집가", "탈것을 세 대 손에 넣었다", lambda st: _s(st, "vehicles") >= 3),
+    ("errand_runner", "심부름꾼", "의뢰를 세 번 완수했다", lambda st: _s(st, "missions") >= 3),
+    ("smuggler", "밀수꾼", "밀수품을 국경 너머로 무사히 전했다", lambda st: _s(st, "smuggled") >= 1),
     ("survivor", "생존왕", "10일차까지 살아남았다", lambda st: st.day >= 10 and st.status != "dead"),
     ("law_abiding", "모범 시민", "범죄를 한 번도 저지르지 않고 귀환했다",
      lambda st: st.status == "won" and _s(st, "crimes") == 0),
@@ -76,6 +78,11 @@ def record_turn(state):
         st["sold"] = st.get("sold", 0) + 1
     elif economy.get("kind") == "gamble" and economy.get("jackpot"):
         st["jackpots"] = st.get("jackpots", 0) + 1
+    mission = flags.get("mission") or {}
+    if mission.get("phase") == "done":
+        st["missions"] = st.get("missions", 0) + 1
+        if mission.get("kind") == "smuggle":
+            st["smuggled"] = st.get("smuggled", 0) + 1
     st["max_heat"] = max(st.get("max_heat", 0), heat_stage(state.wanted))
     st["peak_money"] = max(st.get("peak_money", 0), state.money)
 
@@ -126,7 +133,7 @@ def run_summary(state):
              f"| 일 | {st.get('work_hours', 0):g}시간 · 판 물건 {st.get('sold', 0)}개 |",
              f"| 범죄 | {st.get('crimes', 0)}번 · 최고 수배 {'★' * st.get('max_heat', 0) or '없음'} · "
              f"따돌림 {st.get('escapes', 0)}번 · 체포 {st.get('arrests', 0)}번 |",
-             f"| 탈것 | {st.get('vehicles', 0)}대 |"]
+             f"| 탈것·의뢰 | 탈것 {st.get('vehicles', 0)}대 · 의뢰 {st.get('missions', 0)}번 완수 |"]
     if state.achievements:
         lines += ["", f"**🏆 이번 판의 업적 ({len(state.achievements)}/{len(ACHIEVEMENTS)})**", ""]
         lines += [f"- **{TITLES[k][0]}** — {TITLES[k][1]}" for k in state.achievements if k in TITLES]

@@ -151,6 +151,13 @@ def turn_sfx(state):
         events.append("clue")
     if event.get("kind") == "lucky":
         events.append("lucky")
+    phase = (flags.get("mission") or {}).get("phase")
+    if phase == "offered":
+        events.append("offer")
+    elif phase == "done":
+        events.append("success")
+    elif phase == "failed":
+        events.append("fail")
     economy = flags.get("economy") or {}
     if economy.get("kind") == "gamble":
         events += ["lucky"] if economy.get("jackpot") else (["success"] if economy["amount"] > 0 else ["fail"])

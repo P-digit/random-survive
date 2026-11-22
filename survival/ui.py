@@ -382,8 +382,15 @@ def render_hud(state):
     from .economy import JOBS
     skills = [f"{JOBS[k][0]} Lv{v}" for k, v in state.skills.items() if v]
     room = state.lodging if state.lodging and state.elapsed_hours < state.lodging.get("until", 0) else None
-    if skills or room or state.achievements:
+    if skills or room or state.achievements or state.mission:
         rows = ""
+        if state.mission:
+            m = state.mission
+            from . import geo
+            km = geo.haversine_km(state.lat, state.lon, m["lat"], m["lon"])
+            rows += (f'<div class="weather"><span class="sub">📦 {escape(m["target"])}까지 {escape(m["item"])} · 약 {km:,.0f}km · '
+                     f'${m["reward"]:,} · {max(0, m["deadline"] - state.elapsed_hours):.0f}시간 남음'
+                     + (' · <b style="color:var(--red)">밀수</b>' if m["kind"] == "smuggle" else "") + "</span></div>")
         if state.achievements:
             from .achievements import ACHIEVEMENTS, TITLES
             last = TITLES[state.achievements[-1]][0]

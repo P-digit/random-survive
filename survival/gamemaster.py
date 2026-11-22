@@ -129,6 +129,10 @@ INSTRUCTIONS = """
 - 플레이어가 자기 탈것을 타고 가겠다고 하면, 갈 수 있는지 GM이 미리 판단해 거절하지 말고 반드시
   travel(method='drive') 를 호출한다. 바다·연료·거리 제한은 엔진이 판정하고, 막히면 그 이유를 결과로 준다.
 
+[의뢰 - 엔진이 정한다]
+- 의뢰인(배달·밀수)은 엔진이 등장시킨다. GM이 임의로 의뢰를 만들거나 보수를 주지 않는다. 맡은 의뢰가 있으면
+  입력의 [맡은 의뢰]를 참고해 서술하고, 플레이어가 목적지로 가겠다면 go_to(target='mission') 을 호출한다.
+
 [돈 벌기 - 액수는 엔진이 정한다]
 - 일해서 버는 돈은 work(일의 종류, 시간), 물건을 판 돈은 sell_item, 숙박은 rent_room, 도박은 gamble 로만 처리한다.
   시급·시세·딴 돈은 엔진이 정하므로 서술의 금액을 툴 결과와 같게 쓴다. update_status 로 일당·판 돈을 주지 않는다.
@@ -372,6 +376,22 @@ def build_input(state, player_text, recap=None):
         status = state.police_status()
         if status:
             parts += ["[경찰과 수배 상태]", status]
+        mission = state.turn_flags.get("mission") or {}
+        if mission.get("phase") == "offered":
+            parts += ["[의뢰 제안 - 엔진이 정했다]",
+                      f"{mission['giver']}이(가) 다가와 {mission['item']}을(를) {mission['target']}"
+                      f"({mission['direction']}, 약 {mission['km']:,}km)까지 옮겨 달라고 한다. 보수 ${mission['reward']:,}, "
+                      f"기한 {mission['hours']}시간." + (" 불법 밀수다: 국경·세관에서 걸리면 체포되고 압수당한다."
+                                                       if mission["kind"] == "smuggle" else ""),
+                      "이번 턴은 플레이어의 행동을 서술한 뒤 의뢰인이 이 제안을 하는 장면에서 멈춘다. 맡을지는 플레이어의 "
+                      "다음 행동으로 엔진이 정한다. 보수나 짐을 미리 주지 않는다."]
+        elif mission.get("phase") == "accepted":
+            parts += ["[의뢰 수락 - 엔진이 처리했다]",
+                      f"플레이어가 의뢰를 맡았다. {mission['item']}을(를) 받았다(소지품에 이미 있다). 목적지 {mission['target']}, "
+                      f"보수 ${mission['reward']:,}는 도착하면 엔진이 준다."]
+        doing = state.mission_status()
+        if doing:
+            parts += ["[맡은 의뢰]", doing]
         parts += [f"[플레이어가 이번 턴에 시도하는 행동 - 턴 {state.turn}]",
                   player_text,
                   "(위 행동 하나만 판정한다. 이것은 시도일 뿐이며, 물건·인물의 존재와 성공 여부는 "
@@ -718,6 +738,24 @@ def collect_notices(state):
     from .achievements import TITLES
     for key in flags.get("achievements") or []:
         notices.append({"kind": "good", "title": f"🏆 업적 — {TITLES[key][0]}", "text": TITLES[key][1]})
+    mission = flags.get("mission") or {}
+    phase = mission.get("phase")
+    if phase == "offered":
+        notices.append({"kind": "offer",
+                        "title": f"📦 의뢰 — {mission['giver']}: {mission['item']}을(를) {mission['target']}까지 · "
+                                 f"보수 ${mission['reward']:,} · 기한 {mission['hours']}시간",
+                        "text": f"{mission['direction']} 약 {mission['km']:,}km. 맡으려면 다음 행동으로 \"의뢰를 맡는다\"."
+                                + (" ⚠ 불법 밀수: 나라를 넘을 때 세관·국경 경비대에 걸릴 수 있고, 체포되면 압수됩니다."
+                                   if mission["kind"] == "smuggle" else "")})
+    elif phase == "accepted":
+        notices.append({"kind": "info", "title": f"📦 의뢰를 맡았다 — {mission['target']}까지",
+                        "text": f"보수 ${mission['reward']:,}. \"의뢰 목적지로 간다\"로 그 도시를 향해 갈 수 있습니다. "
+                                f"기한 {mission['hours']}시간."})
+    elif phase == "done":
+        notices.append({"kind": "good", "title": f"📦 의뢰 완료 — {mission['target']}, +${mission['reward']:,}",
+                        "text": f"{mission['giver']}의 {mission['item']}을(를) 무사히 전했습니다."})
+    elif phase == "failed":
+        notices.append({"kind": "bad", "title": f"📦 의뢰 실패 — {mission['target']}", "text": mission["why"]})
     economy = flags.get("economy") or {}
     if economy.get("kind") == "work":
         notices.append({"kind": "good", "title": f"💼 일 — {economy['job']} {economy['hours']:g}시간, +${economy['amount']:,.0f}",
@@ -956,6 +994,8 @@ def run_turn(state, player_text=None):
         state.event = None   # 시작 턴에는 돌발 이벤트 없음
     resolve_offer_action(state)
     resolve_police(state, player_text)
+    if player_text:
+        state.resolve_mission_offer(player_text)   # 지난 턴의 의뢰에 대한 대답을 엔진이 판정한다
     def first_call(previous_id, recap=None):
         return client.responses.create(
             model=LLM_MODEL,
@@ -1026,6 +1066,8 @@ def run_turn(state, player_text=None):
         state.suggestions = clean_suggestions(suggestions) if len(suggestions) == 3 else list(DEFAULT_SUGGESTIONS)
         if state.offer:      # 기회가 살아 있으면 첫 번째 버튼은 항상 '받아들이기'
             state.suggestions[0] = state.offer["accept"]
+        if (state.turn_flags.get("mission") or {}).get("phase") == "offered":   # 의뢰 제안: 첫 버튼은 수락
+            state.suggestions[0] = "의뢰를 맡겠다고 한다"
         if state.pursuit and state.pursuit["turn"] == state.turn:   # 경찰이 막 나타났다: 버튼은 대응 선택지
             from .police import police_suggestions
             state.suggestions = police_suggestions(state)

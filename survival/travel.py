@@ -122,7 +122,7 @@ class TravelMixin:
         if not before or not self.country_code or before == self.country_code or self.status != "playing":
             return None
         stolen = bool(self.vehicle and self.vehicle.get("stolen"))
-        if stolen or self.wanted >= BORDER_CHECK_WANTED:
+        if stolen or self.wanted >= BORDER_CHECK_WANTED or self.carrying_contraband:
             stage = max(self.heat, 3)
             self.pursuit = {"stage": stage, "turn": self.turn, "who": "국경 검문소의 무장 경비대", "kind": "check",
                             "stolen_vehicle": stolen}
@@ -288,6 +288,7 @@ class TravelMixin:
 
     def _relocate(self, new_lat, new_lon, km, method):
         """좌표를 옮기고 새 장소 정보를 갱신한다. 한국에 도착했으면 True."""
+        country_before = self.country_code
         self.lat, self.lon = new_lat, new_lon
         self.distance = geo.distance_to_korea(new_lat, new_lon)
         self.moved_since_image += km
@@ -315,6 +316,8 @@ class TravelMixin:
                 self.status = "won"
             return True
         self._arrive_at_new_place(method)
+        if method != "drive":             # 자기 탈것은 _border_check 가 따로 본다
+            self.customs_check(country_before)
         return False
 
     def _arrive_at_new_place(self, method):
