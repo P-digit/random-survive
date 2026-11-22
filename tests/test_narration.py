@@ -147,3 +147,27 @@ def test_unexplained_tool_payment_gets_a_notice(game, monkeypatch):
     assert game.money == 30 and "💸 지출 -$20 — 운전기사 사례비" in titles
     titles = turn("기사에게 사례비로 $20를 건네고 트럭에 오른다.")
     assert game.money == 10 and not any("💸" in t for t in titles)          # 서술에 있으면 알림 없음
+
+
+def test_hypothetical_money_is_not_moved():
+    """3회차 플레이 테스트: 가정·조건으로 말한 돈을 낸 돈으로 읽어 이유 없이 돈이 빠졌다."""
+    m = gamemaster.money_mentions
+    assert m("숙소 주인에게 8달러를 내고 묵을 수 있다.") == [(8, "promise")]
+    assert m("버스표는 $12를 지불해야 살 수 있다.") == [(12, "promise")]
+    assert m("그는 $20를 받았다고 말했다.") == [(20, "promise")]
+    assert m("당신은 $5를 내고 빵을 산다.") == [(5, "out")]                    # 실제로 낸 돈은 그대로
+    assert m("보수 107달러를 주겠다는 제안을 건넸습니다.") == [(107, "promise")]
+    assert m("짐은 껄껄 웃으며 $4를 받아 들고 생수와 빵을 내어줍니다.") == [(4, "out")]
+    assert m("마을 주민으로부터 수고비로 $12를 받아 호주머니에 채웠다.") == [(12, "in")]
+    assert m("지갑 안에는 $280가 들어 있었고, 당신은 그 돈을 챙겼다.") == [(280, "in")]
+
+
+def test_money_moved_by_narration_shows_when_final_text_drops_it(game, monkeypatch):
+    """보조 장치가 원래 서술에서 읽은 돈이 고쳐 쓴 최종 서술에 없으면 알림으로 알린다."""
+    game.begin_turn()
+    gamemaster.auto_charge(game, "당신은 $8를 내고 방에 들어간다.")
+    assert game.turn_flags["money_log"] == [{"amount": -8, "why": "서술 속 지출"}]
+    titles = [n["title"] for n in gamemaster.money_notices(game, "당신은 방에 들어가 쉰다.")]
+    assert titles == ["💸 지출 -$8 — 서술 속 지출"]
+    assert gamemaster.money_notices(game, "당신은 $8를 내고 방에 들어간다.") == []
+

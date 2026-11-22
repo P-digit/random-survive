@@ -373,6 +373,11 @@ def build_input(state, player_text, recap=None):
                       "이번 턴은 플레이어의 행동을 서술한 뒤, 경찰이 나타나 압박해 오는 장면에서 멈춘다. 체포되거나 "
                       "벗어나는 결과는 정하지 않는다(플레이어의 다음 행동을 엔진이 판정한다). arrest 를 부르지 않는다. "
                       "추천 행동에는 도망·숨기·둘러대기·뇌물·자수 중 상황에 맞는 것을 넣는다."]
+        disguise = state.turn_flags.get("disguise")
+        if disguise:
+            parts += ["[변장 - 엔진 판정]",
+                      (f"변장했다({', '.join(disguise['with'])} 사용). 48시간 동안 경찰이 알아보기 어렵다." if disguise["ok"]
+                       else f"변장하지 못했다: {disguise['why']}. 그대로 서술한다.")]
         status = state.police_status()
         if status:
             parts += ["[경찰과 수배 상태]", status]
@@ -416,7 +421,11 @@ MONEY_VERBS = (   # (종류, 동사들) — 금액 뒤 28자 안에서 가장 �
 # 받는 쪽이 플레이어라는 표시 (누가 '건네주는' 돈인지 가린다)
 TO_PLAYER = re.compile(r"당신에게|당신 손에|손에 쥐여|수고비|품삯|일당|보수|사례금|사례로|여비|용돈|대가로|급여|월급|팁으로")
 TO_SOMEONE = re.compile(r"[가-힣]+에게")
+RECEIVE = ("받았", "받아", "받는다", "받고", "받습니다")
+THIRD_PERSON = re.compile(r"[가-힣]+(은|는|이|가)\s")      # 문장 앞쪽의 다른 사람 주어
 PROMISE = re.compile(r"겠|기로|준다고|주마|줄게|수 있|려고|려 한")
+# 동사 뒤 문장의 나머지에 이런 말이 있으면 가정·조건·전해 들은 말이다 ("8달러를 내면 묵을 수 있다", "내야 한다")
+HYPOTHETICAL = re.compile(r"수 있|수있|야 한|야 해|야한|야해|려면|으면|다면|라면|다고|라고|는지|ㄹ지|을지|겠")
 
 
 def money_mentions(text):
@@ -432,14 +441,20 @@ def money_mentions(text):
                 continue
             position, _, kind, verb = min((pos, -len(verb), kind, verb) for pos, kind, verb in hits)   # 같은 자리면 긴 말
             between = after[:position]                # 금액과 동사 사이 ("$15를 수고비로 건넸다")
-            if PROMISE.search(after[position + len(verb):position + len(verb) + 8]):
-                kind = "promise"                    # "$70을 챙겨 주겠다" — 아직 오가지 않은 돈
+            rest = sentence[match.end() + position + len(verb):]
+            if PROMISE.search(after[position + len(verb):position + len(verb) + 8]) or PROMISE.search(between):
+                kind = "promise"                    # "$70을 챙겨 주겠다", "107달러를 주겠다는 제안을 건넸다"
+            elif HYPOTHETICAL.search(rest[:20]):
+                kind = "promise"                    # "8달러를 내면 묵을 수 있다" — 가정이다
             elif verb in ("건네", "건넸"):
                 # "수고비로 10달러를 건네줍니다"(받음) / "주인에게 $12를 건네고"(냄)
                 if TO_PLAYER.search(before) or TO_PLAYER.search(between):
                     kind = "in"
                 elif not TO_SOMEONE.search(before) and "당신은" not in before and "당신이" not in before:
                     kind = "unknown"
+            elif kind == "in" and verb in RECEIVE and "당신" not in sentence \
+                    and not TO_PLAYER.search(before + between) and THIRD_PERSON.search(before):
+                kind = "out"                        # "짐은 $4를 받아 들고" — 받은 사람은 상대다 (플레이어가 냈다)
             elif kind == "given":
                 kind = "in" if TO_PLAYER.search(before) or TO_PLAYER.search(between) else "unknown"
             found.append((amount, kind))
@@ -462,6 +477,7 @@ def auto_money(state, narration):
         amount = min(loss, state.money)
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
+        state.turn_flags.setdefault("money_log", []).append({"amount": -amount, "why": "서술 속 손실"})
         return -amount
     gains = [amount for amount, kind in mentions
              if kind == "in" or (kind == "theft" and state.turn_flags.get("crime_intent", ("explicit", ""))[0] != "none")]
@@ -469,6 +485,7 @@ def auto_money(state, narration):
         amount = min(gains[0], MONEY_GAIN_LIMIT)
         state.money = round(state.money + amount, 2)
         state.turn_flags["earned"] = amount
+        state.turn_flags.setdefault("money_log", []).append({"amount": amount, "why": "서술 속 수입"})
         return amount
     return 0.0
 
@@ -484,6 +501,7 @@ def auto_charge(state, narration):
     if amount > 0:
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
+        state.turn_flags.setdefault("money_log", []).append({"amount": -amount, "why": "서술 속 지출"})
     return amount
 
 
@@ -818,7 +836,7 @@ def resolve_police(state, player_text):
     if state.wanted >= 1 and mentions(player_text, LAY_LOW_WORDS):
         state.turn_flags["laying_low"] = True
     if mentions(player_text, DISGUISE_WORDS):
-        state.put_on_disguise(player_text)
+        state.try_disguise(player_text)        # 쓸 물건이 있어야 변장된다 (GM 서술과 어긋나지 않게)
     return None
 
 
@@ -996,6 +1014,7 @@ def run_turn(state, player_text=None):
     resolve_police(state, player_text)
     if player_text:
         state.resolve_mission_offer(player_text)   # 지난 턴의 의뢰에 대한 대답을 엔진이 판정한다
+        state.seek_mission(player_text)            # 일거리를 직접 찾으면 의뢰인이 나타날 확률이 크다
     def first_call(previous_id, recap=None):
         return client.responses.create(
             model=LLM_MODEL,
@@ -1053,13 +1072,15 @@ def run_turn(state, player_text=None):
         # LLM이 시간을 흘리지 않았다면 플레이어 입력으로 추정해서 반영한다
         state.end_turn(*estimate_time(player_text))
 
-    state.notices = collect_notices(state) + money_notices(state, response.output_text)
+    state.notices = collect_notices(state)
     # 지명(현지 문자일 수 있음)은 그대로 두고, 서술에 섞인 다른 언어만 고친다
     text = ensure_korean(client, response.output_text or "", allowed=(state.place_name, state.scene_place))
     text = ensure_scene(client, text, state)
     text = ensure_vitals(client, text, state, seen)
     body, suggestions = split_suggestions(text)
     body = enforce_redo(body, state.turn_flags.get("pre_offer"))
+    # 서술에 빠진 돈 변화 알림은 화면에 나가는 최종 서술로 판단한다 (보정 과정에서 금액 문장이 빠질 수 있다)
+    state.notices = state.notices + money_notices(state, body)
     if not body:
         body = "(잠시 정신이 아득해진다. 다시 행동을 정해 보자.)"
     if state.status == "playing":

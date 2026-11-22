@@ -39,6 +39,12 @@ DISGUISE_WORDS = re.compile(r"변장|옷을.{0,8}(갈아입|바꿔 ?입)|머리�
                             r"|선글라스|수염을.{0,6}(밀|민|깎)|얼굴을.{0,8}(가리|가린)")
 
 
+# 변장에 쓸 물건 (머리·수염은 칼·가위·면도기가 있으면 된다)
+DISGUISE_ITEMS = ("모자", "선글라스", "옷", "재킷", "외투", "스카프", "두건", "가발", "마스크", "후드", "목도리", "안경")
+HAIR_WORDS = re.compile(r"머리를|수염을")
+BLADE_ITEMS = ("칼", "가위", "면도")
+
+
 def heat_stage(wanted):
     """수배도 → 단계(0~5)."""
     return sum(wanted >= floor for floor in STAGE_FLOORS)
@@ -226,6 +232,23 @@ class PoliceMixin:
         before = self.wanted
         self.wanted = max(0.0, self.wanted - cut)
         return round(before - self.wanted, 1)
+
+    def try_disguise(self, how):
+        """변장을 시도한다. 쓸 물건이 있어야 된다(머리·수염은 칼·가위). 결과를 turn_flags.disguise 에 남긴다."""
+        if HAIR_WORDS.search(how or ""):        # 머리·수염을 바꾸려면 칼·가위·면도기
+            tools = [i for i in self.items if any(w in i for w in BLADE_ITEMS)]
+        else:
+            tools = [i for i in self.items if any(w in i for w in DISGUISE_ITEMS)]
+        if not tools and self.place_type == "야생":
+            self.turn_flags["disguise"] = {"ok": False, "why": "변장할 물건(모자·선글라스·옷 등)이 없다"}
+            return False
+        if not tools:
+            self.turn_flags["disguise"] = {"ok": False,
+                                           "why": "변장할 물건이 없다. 가게에서 모자·옷·선글라스 등을 먼저 사야 한다"}
+            return False
+        self.put_on_disguise(how)
+        self.turn_flags["disguise"] = {"ok": True, "with": tools[:2]}
+        return True
 
     def put_on_disguise(self, how):
         self.disguise = {"until": self.elapsed_hours + DISGUISE_HOURS, "how": str(how)[:40]}
