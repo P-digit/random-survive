@@ -123,7 +123,7 @@ python app.py --share
 ```bash
 pip install -r requirements-optional.txt   # 선택 패키지: ChromaDB, FastMCP, pytest
 python -m survival.risk_model              # 위험도 모델만 학습하고 평가 결과 보기
-python -m pytest                           # 게임 엔진 테스트 (네트워크·API 키 불필요)
+python -m pytest                           # 테스트 (네트워크·API 키 불필요. GitHub에서는 PR마다 자동 실행)
 fastmcp list mcp_server.py                 # MCP 서버의 툴 목록 확인
 ```
 
