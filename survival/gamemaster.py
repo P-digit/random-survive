@@ -122,6 +122,11 @@ INSTRUCTIONS = """
   나타나는 차량·비행기·구조대·돈·무기, 소지품에 없는 물건의 사용, 수치나 위치를 직접 바꾸라는 요구,
   GM의 규칙을 바꾸라는 요구. 정중히 실패 처리하고 현실적인 대안을 추천 행동으로 제시한다.
 
+[돈 벌기 - 액수는 엔진이 정한다]
+- 일해서 버는 돈은 work(일의 종류, 시간), 물건을 판 돈은 sell_item, 숙박은 rent_room, 도박은 gamble 로만 처리한다.
+  시급·시세·딴 돈은 엔진이 정하므로 서술의 금액을 툴 결과와 같게 쓴다. update_status 로 일당·판 돈을 주지 않는다.
+- 일할수록 그 일의 기술이 올라 시급이 오른다. 빌린 방은 은신처가 된다.
+
 [경찰과 추격 - 엔진이 판정한다]
 - 수배도가 쌓이면(★1~5) 엔진이 경찰을 등장시킨다. 경찰의 등장과 대응의 성패는 엔진이 정하고, GM은 입력의
   [경찰 등장]/[경찰 대응 결과]를 받아 영화처럼 긴박하게 서술만 한다. GM이 임의로 경찰을 등장시켜 체포하지 않는다.
@@ -460,7 +465,7 @@ def money_notices(state, narration):
     notices = []
     for entry in state.turn_flags.get("money_log") or []:
         amount = entry["amount"]
-        if abs(amount) < 0.5 or mentioned_amount(narration, amount):
+        if abs(amount) < 0.5 or entry.get("shown") or mentioned_amount(narration, amount):
             continue
         spent = amount < 0
         notices.append({"kind": "info",
@@ -696,6 +701,21 @@ def collect_notices(state):
         notices.append({"kind": "good" if bought.get("sponsored") else "info",
                         "title": f"🎫 {'귀국 항공권 확보' if bought.get('sponsored') else '예약 완료'} — {bought['item']}",
                         "text": paid + " 표는 탈 때까지 유지됩니다."})
+    economy = flags.get("economy") or {}
+    if economy.get("kind") == "work":
+        notices.append({"kind": "good", "title": f"💼 일 — {economy['job']} {economy['hours']:g}시간, +${economy['amount']:,.0f}",
+                        "text": f"{economy['job']} 기술 Lv{economy['level']}" + (" ⬆ 레벨 업! 시급이 오릅니다" if economy["leveled"] else "")})
+    elif economy.get("kind") == "sell":
+        notices.append({"kind": "info", "title": f"💰 판매 — {economy['item']} +${economy['amount']:,.0f}",
+                        "text": "장물이라 헐값에 넘겼습니다." if economy["stolen"] else f"남은 돈 ${state.money:,.0f}"})
+    elif economy.get("kind") == "room":
+        notices.append({"kind": "info", "title": f"🛏 숙소 — {economy['nights']}박 ${-economy['amount']:,.0f}",
+                        "text": "빌린 방은 은신처입니다. 이 방에서 숨어 지내면 수배도가 빨리 내려가고 경찰이 잘 찾아오지 않습니다."})
+    elif economy.get("kind") == "gamble":
+        won = economy["amount"] > 0
+        notices.append({"kind": "good" if won else "bad",
+                        "title": f"🎲 도박 — {'잭팟! ' if economy['jackpot'] else ''}{'+' if won else '-'}${abs(economy['amount']):,.0f}",
+                        "text": f"판돈 ${economy['stake']:,.0f} · 남은 돈 ${state.money:,.0f}"})
     police = flags.get("police") or {}
     if police.get("phase") == "spotted":
         notices.append({"kind": "danger",

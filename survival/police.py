@@ -7,6 +7,7 @@ import random
 import re
 
 from .config import CRITICAL_CHANCE, WANTED_DECAY_PER_HOUR
+from .economy import SAFEHOUSE_LAY_LOW, SAFEHOUSE_POLICE
 from .util import clamp
 
 STAGE_FLOORS = (1, 20, 40, 60, 80)          # 수배도가 이 값 이상이면 ★1 ~ ★5
@@ -97,6 +98,8 @@ class PoliceMixin:
             factor *= 0.7
         if self.disguised:
             factor *= 0.4
+        if self.in_lodging:
+            factor *= SAFEHOUSE_POLICE              # 빌린 방(은신처) 안에는 경찰이 잘 찾아오지 않는다
         stolen = bool(self.vehicle and self.vehicle.get("stolen"))
         return round(min(0.9, base * factor + (0.15 if stolen else 0.0)), 3)
 
@@ -218,7 +221,8 @@ class PoliceMixin:
 
     def lay_low(self, hours):
         """숨어 지낸 시간만큼 수배도를 더 빨리 낮춘다(기본 감소에 더해 LAY_LOW_MULTIPLIER-1 배)."""
-        cut = WANTED_DECAY_PER_HOUR * (LAY_LOW_MULTIPLIER - 1) * max(0.0, hours)
+        multiplier = SAFEHOUSE_LAY_LOW if self.in_lodging else LAY_LOW_MULTIPLIER   # 은신처면 더 빨리
+        cut = WANTED_DECAY_PER_HOUR * (multiplier - 1) * max(0.0, hours)
         before = self.wanted
         self.wanted = max(0.0, self.wanted - cut)
         return round(before - self.wanted, 1)

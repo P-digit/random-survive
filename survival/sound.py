@@ -150,6 +150,11 @@ def turn_sfx(state):
         events.append("clue")
     if event.get("kind") == "lucky":
         events.append("lucky")
+    economy = flags.get("economy") or {}
+    if economy.get("kind") == "gamble":
+        events += ["lucky"] if economy.get("jackpot") else (["success"] if economy["amount"] > 0 else ["fail"])
+    elif economy.get("kind") in ("work", "sell"):
+        events.append("ticket")                    # 딩동: 돈이 들어왔다
     if flags.get("vehicle") and state.vehicle:
         events.append("engine")
     if flags.get("ticket"):
