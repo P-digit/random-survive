@@ -83,6 +83,7 @@ def record_turn(state):
         st["missions"] = st.get("missions", 0) + 1
         if mission.get("kind") == "smuggle":
             st["smuggled"] = st.get("smuggled", 0) + 1
+    record_trail(state)
     st["max_heat"] = max(st.get("max_heat", 0), heat_stage(state.wanted))
     st["peak_money"] = max(st.get("peak_money", 0), state.money)
 
@@ -92,6 +93,22 @@ def record_turn(state):
         flags["achievements"] = unlocked
         add_to_hall(unlocked)
     return unlocked
+
+
+TRAIL_STEP_KM = 5            # 이보다 적게 움직였으면 지도의 발자취에 새 점을 찍지 않는다
+TRAIL_MAX = 300              # 발자취 점이 이보다 많아지면 하나 걸러 하나씩 솎아 낸다 (처음과 끝은 남긴다)
+
+
+def record_trail(state):
+    """지도에 그릴 발자취: 위치가 바뀐 턴마다 좌표를 남긴다 (stats.trail = [[lat, lon], ...])."""
+    from . import geo
+    trail = state.stats.setdefault("trail", [])
+    point = [round(state.lat, 2), round(state.lon, 2)]
+    if trail and geo.haversine_km(trail[-1][0], trail[-1][1], point[0], point[1]) < TRAIL_STEP_KM:
+        return
+    trail.append(point)
+    if len(trail) > TRAIL_MAX:
+        trail[:] = trail[:-1:2] + [trail[-1]]
 
 
 def add_to_hall(keys):

@@ -111,8 +111,9 @@ def test_cue_is_rendered_safely_into_html(game):
 
 
 def test_sound_script_is_loaded_in_head():
-    head = ui.sound_head()
-    assert head.startswith("<script>") and "rs-sound-cue" in head and "AudioContext" in head
+    head = ui.page_head()
+    assert "<script>" in head and "rs-sound-cue" in head and "AudioContext" in head
+    assert "rs-sound-slot" in head                     # 소리 조절은 상단 줄에 자리를 잡는다
 
 
 def test_sound_engine_runs_in_a_fake_browser(game):

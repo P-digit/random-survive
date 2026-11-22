@@ -18,8 +18,9 @@ from survival.state import create_game
 from survival.weather import weather_category
 from survival.achievements import run_summary
 from survival.sound import soundscape, turn_sfx
-from survival.ui import (CSS, INTRO_MESSAGE, TITLE_HTML, render_hud, render_location,
-                         render_notices, render_sound_cue, sound_head, turn_summary)
+from survival.ui import (CSS, INTRO_MESSAGE, TITLE_HTML, render_alerts, render_bag, render_location,
+                         render_notices, render_record, render_sound_cue, render_status, render_topbar,
+                         render_vitals, page_head, turn_summary)
 
 
 def make(component, **kwargs):
@@ -48,16 +49,22 @@ def view(state, chat, busy=False, quiet=False):
     if busy:
         placeholder = "진행 중..."
     elif playing:
-        placeholder = "무엇을 할까요? 예) 강을 따라 하류로 내려간다"
+        placeholder = "무엇을 할까요? 예) 강을 따라 하류로 내려간다  ·  / 키로 바로 입력, 1·2·3으로 추천 행동"
     elif state is None:
         placeholder = "먼저 '낙하 시작'을 누르세요"
     else:
         placeholder = "게임이 끝났습니다. '낙하 시작'으로 다시 도전하세요"
+    alerts = render_alerts(state)
     return (
         state,
         chat,
-        render_hud(state) + sound_cue(state, quiet),   # 상태창에 소리 신호를 함께 싣는다
+        render_topbar(state) + sound_cue(state, quiet),   # 상단 상태줄에 소리 신호를 함께 싣는다
         render_location(state),
+        render_vitals(state),
+        gr.update(value=alerts, visible=bool(alerts)),
+        render_status(state),
+        render_bag(state),
+        render_record(state),
         state.image_path if state is not None else None,
         *buttons,
         gr.update(value="", interactive=playing and not busy, placeholder=placeholder),
@@ -189,38 +196,53 @@ def play(message, state, use_image):
 def build_app():
     blocks_kwargs = {"title": "랜덤 좌표 생존기"}
     # Gradio 5는 css/theme를 Blocks에, Gradio 6은 launch에 넘긴다
-    style = {"css": CSS, "theme": gr.themes.Base(primary_hue="amber", neutral_hue="stone"), "head": sound_head()}
+    style = {"css": CSS, "theme": gr.themes.Base(primary_hue="amber", neutral_hue="stone"), "head": page_head()}
     css_in_launch = "css" in inspect.signature(gr.Blocks.launch).parameters
     if not css_in_launch:
         blocks_kwargs.update(style)
 
     with gr.Blocks(**blocks_kwargs) as demo:
         state = gr.State(None)
-        gr.HTML(TITLE_HTML)
+        # 위: 제목 · 상태줄 · 시작 버튼
+        with gr.Row(elem_id="topbar"):
+            gr.HTML(TITLE_HTML, elem_id="title-wrap")
+            topbar = gr.HTML(render_topbar(None), elem_id="strip-wrap")
+            use_image = gr.Checkbox(
+                value=IMAGES_SUPPORTED, interactive=IMAGES_SUPPORTED, container=False, elem_id="image-toggle",
+                label="🖼 장면 그림" if IMAGES_SUPPORTED else "🖼 그림 미지원")
+            gr.HTML('<div id="rs-sound-slot"></div>', elem_id="sound-wrap")
+            resume = gr.Button("💾 이어하기", visible=savegame.exists(), elem_id="resume-btn", scale=0)
+            start = gr.Button("🎲 낙하 시작", variant="primary", elem_id="start-btn", scale=0)
 
-        with gr.Row():
-            # 왼쪽: 장면 + 대화
-            with gr.Column(scale=7):
-                scene = make(gr.Image, label="현재 장면", show_label=False, interactive=False,
-                             height=380, elem_id="scene", type="filepath")
-                location = gr.HTML(render_location(None))
-                chatbot = make(gr.Chatbot, value=intro_chat(), type="messages", height=430,
-                               show_label=False, elem_id="log")
+        with gr.Row(elem_id="main-row"):
+            # 왼쪽: 장면 · 위치 · 신체 수치
+            with gr.Column(scale=4, min_width=260, elem_id="left-col"):
+                scene = make(gr.Image, label="현재 장면", show_label=False, interactive=False, elem_id="scene",
+                             type="filepath", buttons=["fullscreen"], show_download_button=False,
+                             show_share_button=False)
+                location = gr.HTML(render_location(None), elem_id="loc-wrap")
+                vitals = gr.HTML(render_vitals(None), elem_id="vitals-wrap")
+            # 가운데: 이야기 · 지금 결정할 일 · 행동
+            with gr.Column(scale=7, min_width=320, elem_id="center-col"):
+                chatbot = make(gr.Chatbot, value=intro_chat(), type="messages", show_label=False, elem_id="log",
+                               buttons=["copy"], show_copy_button=False, show_share_button=False)
+                alerts = gr.HTML("", visible=False, elem_id="alerts-wrap")
                 with gr.Row(elem_id="actions"):
                     quick = [gr.Button("", visible=False) for _ in range(3)]
-                msg = gr.Textbox(show_label=False, interactive=False, lines=1,
+                msg = gr.Textbox(show_label=False, interactive=False, lines=1, elem_id="msg",
                                  placeholder="먼저 '낙하 시작'을 누르세요")
-            # 오른쪽: 상태창
-            with gr.Column(scale=4, min_width=320):
-                start = gr.Button("🎲 낙하 시작", variant="primary", elem_id="start-btn")
-                resume = gr.Button("💾 이어하기", visible=savegame.exists(), elem_id="resume-btn")
-                hud = gr.HTML(render_hud(None))
-                use_image = gr.Checkbox(
-                    value=IMAGES_SUPPORTED, interactive=IMAGES_SUPPORTED,
-                    label="장면 이미지 생성 (끄면 더 빠르고 저렴)" if IMAGES_SUPPORTED
-                    else f"장면 이미지 생성 ({describe_provider()}에서는 아직 지원하지 않음)")
+            # 오른쪽: 정보 탭
+            with gr.Column(scale=4, min_width=280, elem_id="right-col"):
+                with gr.Tabs(elem_id="panel-tabs"):
+                    with gr.Tab("🧭 상황"):
+                        status_tab = gr.HTML(render_status(None))
+                    with gr.Tab("🎒 소지품"):
+                        bag_tab = gr.HTML(render_bag(None))
+                    with gr.Tab("🏆 기록"):
+                        record_tab = gr.HTML(render_record(None))
 
-        outputs = [state, chatbot, hud, location, scene, *quick, msg, start, resume]
+        outputs = [state, chatbot, topbar, location, vitals, alerts, status_tab, bag_tab, record_tab, scene,
+                   *quick, msg, start, resume]
         start.click(new_game, inputs=[use_image], outputs=outputs)
         resume.click(resume_game, inputs=[use_image], outputs=outputs)
         # 페이지를 새로고침하면 화면이 처음 상태로 돌아가므로, 이어하기 버튼을 다시 판단한다

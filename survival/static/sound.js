@@ -374,10 +374,18 @@
     document.body.appendChild(box);
   }
 
+  // 화면에 자리(#rs-sound-slot, 상단 줄)가 있으면 그리로 옮긴다. Gradio가 화면을 늦게 그려서 처음엔 없을 수 있다.
+  function dockControls() {
+    const slot = document.getElementById("rs-sound-slot");
+    const box = document.getElementById("rs-sound-controls");
+    if (slot && box && box.parentElement !== slot) slot.appendChild(box);
+  }
+
   function init() {
     buildControls();
+    dockControls();
     readCue();
-    new MutationObserver(readCue).observe(document.body, {
+    new MutationObserver(() => { dockControls(); readCue(); }).observe(document.body, {
       subtree: true, childList: true, attributes: true, attributeFilter: ["data-cue"],
     });
     // 브라우저 정책: 첫 클릭·키 입력 뒤에만 소리를 낼 수 있다
