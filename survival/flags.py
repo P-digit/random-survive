@@ -52,6 +52,7 @@ class TurnFlags(TypedDict, total=False):
     laying_low: bool              # 플레이어가 숨어 지낸다 (수배도가 더 빨리 내려간다)
     economy: dict                 # 일·판매·숙소·도박 결과 {kind: work/sell/room/gamble, amount, ...}
     border: dict                  # 자기 탈것으로 국경을 넘음 {from, to, stopped(경비대와 마주침)}
+    achievements: list            # 이번 턴에 새로 연 업적 id
 
 
 class PlaceFlags(TypedDict, total=False):

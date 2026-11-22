@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 239개)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 247개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -28,6 +28,7 @@
 | `survival/offers.py` | `OfferMixin`: 기회의 조건·계획·수락·거절·만료와 반복 방지 |
 | `survival/police.py` | `PoliceMixin`: 수배 단계(★1~5), 경찰 등장(`roll_police`), 대응 판정(`respond_to_police`), 은신(`lay_low`), 변장. 입력 → 대응 종류(`classify_response`) (11장) |
 | `survival/economy.py` | `EconomyMixin`: 일(`work`, 시급·기술), 팔기(`sell_item`, 시세), 방(`rent_room`, 은신처), 도박(`gamble`) (12장) |
+| `survival/achievements.py` | 여정 기록(`record_turn`, `end_turn`에서 턴 기록으로 통계를 모음), 업적 16개, 명예의 전당(`saves/hall_of_fame.json`), 결산(`run_summary`) (14장) |
 | `survival/util.py` | `clamp` 등 여러 모듈이 함께 쓰는 작은 도구 |
 | `survival/gamemaster.py` | GM 지시문(`INSTRUCTIONS`), 입력 구성(`build_input`), 턴 루프(`run_turn`), 서술 사후 보정(한국어·장면·몸 상태·되풀이), 자동 소비·결제·수입 |
 | `survival/llm.py` | LLM 공급자 연결. OpenAI는 클라이언트를 그대로 쓰고, Gemini는 Responses API·Images API 모양을 흉내 내는 어댑터(`GeminiClient`)로 감싼다 (9장) |
@@ -151,3 +152,9 @@
 - 운전(`travel(method='drive')`): 연료 소모(연료 없는 탈것은 그대로), 자전거는 `walk` 활동(기력 소모). 연료가 떨어지면 **탈것은 남고** range 0으로 멈춘다. `refuel`: 마을·도시(경비행기는 도시)에서 돈으로 채우거나, 어디서든 소지품 연료통(`JERRYCAN_WORDS`)으로 +100km
 - 운전 요청 판정(`tools.drive_requested`): 입력에 자기 탈것을 가리키는 말 + 이동 동사(타고·몰고·달린다·운전·간다 …)가 있으면 사이에 다른 말이 있어도 인정
 - 국경: 운전으로 `country_code`가 바뀌면 `turn_flags.border`. 훔친 탈것이거나 수배도 ≥ `BORDER_CHECK_WANTED`(40)면 `pursuit`(국경 경비대, ★ 최소 3, 검문)를 만들어 다음 턴에 경찰과 같은 방식으로 판정
+
+## 14. 업적과 여정 결산 (`survival/achievements.py`)
+- 통계는 `end_turn`의 `record_turn` 한 곳에서 그 턴의 기록(`turn_flags`: moved·earned·paid·attempt·police·arrested·vehicle·border·economy)으로 모은다 → `state.stats`(turns, km, countries, earned, spent, crimes, criticals, escapes, arrests, vehicles, borders, work_hours, sold, jackpots, max_heat, peak_money)
+- 업적 16개(`ACHIEVEMENTS`: 조건 함수). 새로 열리면 `state.achievements`, `turn_flags.achievements` → 알림 "🏆 업적 — …", 효과음(discover), 상태창 LIFE 칸
+- 명예의 전당: 판이 바뀌어도 남는 업적별 횟수·처음 연 날. `HALL_ENABLED`(공유 모드에서는 끔), 테스트는 임시 경로
+- 게임이 끝나면 `app.play`가 마지막 응답 뒤에 `run_summary`(결산 표와 이번 판의 업적)를 붙인다

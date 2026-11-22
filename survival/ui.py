@@ -382,8 +382,13 @@ def render_hud(state):
     from .economy import JOBS
     skills = [f"{JOBS[k][0]} Lv{v}" for k, v in state.skills.items() if v]
     room = state.lodging if state.lodging and state.elapsed_hours < state.lodging.get("until", 0) else None
-    if skills or room:
+    if skills or room or state.achievements:
         rows = ""
+        if state.achievements:
+            from .achievements import ACHIEVEMENTS, TITLES
+            last = TITLES[state.achievements[-1]][0]
+            rows += (f'<div class="weather"><span class="sub">🏆 업적 {len(state.achievements)}/{len(ACHIEVEMENTS)} · '
+                     f'최근: {escape(last)}</span></div>')
         if skills:
             rows += f'<div class="weather"><span class="sub">💼 {escape(" · ".join(skills))}</span></div>'
         if room:

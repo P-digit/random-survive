@@ -98,6 +98,8 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
     skills: dict = field(default_factory=dict)     # 일의 기술 레벨 {labor/service/skilled/street: 0~5}
     work_hours: dict = field(default_factory=dict) # 일한 시간 (기술 경험)
     lodging: dict = field(default_factory=dict)    # 빌린 방 {lat, lon, place, until, nights} — 은신처
+    stats: dict = field(default_factory=dict)      # 여정 기록 (achievements.record_turn)
+    achievements: list = field(default_factory=list)   # 이번 판에 연 업적 id
     _snapshot: dict = field(default_factory=dict)
 
     # ---------- 시간 ----------
@@ -527,6 +529,8 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
             self.expire_offer()          # 제안은 나온 다음 턴까지만 유효하다
         now = self._tracked()
         self.delta = {k: round(now[k] - self._snapshot.get(k, now[k]), 2) for k in now}
+        from .achievements import record_turn
+        record_turn(self)                 # 여정 기록과 업적
         # 낮↔밤 변화는 장면이 바뀐 것이 아니다. 그림은 같은 장면을 편집해 빛만 바꾼다 (app.py)
 
     def refresh_risk(self):
