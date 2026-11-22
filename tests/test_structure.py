@@ -5,6 +5,7 @@ from survival import crime, inventory, journey, offers, state, travel
 from survival.state import GameState
 from tests.helpers import patch_everywhere
 
+
 MIXINS = (inventory.InventoryMixin, crime.CrimeMixin, travel.TravelMixin, journey.JourneyMixin, offers.OfferMixin)
 # 나누기 전 state.py의 GameState에 있던 메서드 (refactor/state-split 기준)
 METHODS_BEFORE = ['_advance_journey', '_arrest', '_arrive_at_new_place', '_arrive_journey', '_check_death', '_close_offer', '_drive', '_finish_offer', '_go_airport_now', '_go_embassy_now', '_head_to_village', '_instant_offer', '_leg_mode', '_note_gain', '_place_new_location', '_record_crime', '_relocate', '_start_journey', '_tracked', 'accept_offer', 'acquire_vehicle', 'add_character', 'add_lead', 'apply_delta', 'arrest', 'attempt', 'begin_turn', 'biome_name', 'buy_ticket', 'closed_offers_here', 'consume_item', 'crime_aftermath', 'day', 'decline_offer', 'early', 'early_message', 'end_turn', 'enemies_nearby', 'event_context', 'expire_offer', 'fare', 'find_character', 'find_item', 'find_lead', 'find_ticket', 'find_ticket_by_item', 'follow_lead', 'go_to', 'guard_unrequested_move', 'hazard', 'hour', 'in_extreme_wild', 'indoor', 'is_night', 'mark_victim', 'notorious_here', 'offer_closed', 'offer_needs', 'pass_time', 'pay', 'place_changed', 'plan_offer', 'recently_expired', 'refresh_climate', 'refresh_risk', 'remember', 'repatriate', 'same_place', 'seek_help', 'set_scene', 'set_weather', 'settle_consumption', 'sip_item', 'summary', 'sync_weather', 'travel', 'update_items', 'visible_things', 'where']

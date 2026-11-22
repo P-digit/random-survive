@@ -11,6 +11,7 @@ from pathlib import Path
 
 from survival.flags import PLACE_FLAG_KEYS, TURN_FLAG_KEYS
 
+
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = sorted((ROOT / "survival").glob("*.py")) + [ROOT / "app.py"]
 DICTS = {"turn_flags": "turn", "flags": "place"}

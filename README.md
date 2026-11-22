@@ -325,7 +325,8 @@ random-survive/
 │   ├── static/sound.js       # 브라우저 소리 엔진 (Web Audio 합성)
 │   └── ui.py                 # CSS, 상태창 HTML
 ├── data/survival_guide.txt   # RAG용 생존 지식 문서
-├── tests/test_engine.py      # 엔진 테스트 (네트워크·API 키 없이 실행)
+├── tests/test_*.py          # 주제별 테스트 (state·world·inventory·travel·journey·crime·offers·narration·scene·save)
+├── tests/conftest.py, helpers.py  # 공용 게임 픽스처, 네트워크 차단, 테스트 도우미
 ├── tests/test_llm.py         # LLM 공급자 어댑터 테스트
 ├── tests/test_sound.py       # 배경 소리 테스트 (node가 있으면 sound.js도 가짜 브라우저에서 실행)
 ├── tests/test_flags.py       # 턴 기록 키 오탈자 검사
