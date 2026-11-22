@@ -212,4 +212,5 @@ class InventoryMixin:
                                "사지 못했다고 서술하라."}
         self.money = round(self.money - amount, 2)
         self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + amount
+        self.turn_flags.setdefault("money_log", []).append({"amount": -amount, "why": purpose or "값"})
         return {"success": True, "message": f"{purpose or '값'}으로 ${amount:.0f}을(를) 냈다. 남은 돈 ${self.money:.0f}."}

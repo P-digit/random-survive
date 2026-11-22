@@ -346,6 +346,9 @@ class GameState(InventoryMixin, CrimeMixin, TravelMixin, JourneyMixin, OfferMixi
             self.turn_flags["paid"] = self.turn_flags.get("paid", 0) + before - self.money
         elif self.money > before:
             self.turn_flags["earned"] = self.turn_flags.get("earned", 0) + self.money - before
+        if self.money != before:
+            self.turn_flags.setdefault("money_log", []).append({"amount": round(self.money - before, 2),
+                                                                "why": reason or "상황 변화"})
         self._check_death(reason or "치명적인 부상을 입었다")
 
     # ---------- 이야기의 개연성: 사실과 단서 ----------

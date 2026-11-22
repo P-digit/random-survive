@@ -8,7 +8,7 @@
 - **목표:** 지구의 랜덤 육지 좌표에서 시작해 서울 반경 `ARRIVAL_RADIUS_KM`(60km) 안으로 들어오면 승리. 체력이 0이 되면 패배
 - **기술 스택:** Python 3.11, Gradio(UI), OpenAI Responses API 또는 Google Gemini(OpenAI 호환 Chat Completions) + Function Calling(GM), Images API 또는 Gemini 그림 모델 + Vision(장면 그림), scikit-learn(위험도 모델), 임베딩 RAG(ChromaDB, 없으면 numpy), Open-Meteo / Nominatim(날씨·기후·지명)
 - **실행:** `.venv/bin/python app.py` (`.env`에 `OPENAI_API_KEY` 또는 `GEMINI_API_KEY` 필요)
-- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 190개: 엔진 142 + LLM 어댑터 17 + 소리 22 + 플래그 키 4 + 구조 5)
+- **테스트:** `.venv/bin/pytest -q` (네트워크·API 없이 검증. 현재 195개)
 
 ## 2. 설계 원칙: "숫자는 엔진, 이야기는 LLM"
 - GM은 체력·돈·위치·소지품을 **직접 바꾸지 못한다.** 툴 호출로 엔진에 요청만 하고, 엔진(`GameState`)이 규칙 검사와 변화 폭 제한을 한다.
@@ -67,6 +67,9 @@
 3. GM 호출(Responses API, `previous_response_id`로 멀티턴). 대화를 잃으면 `make_recap`으로 새 대화를 시작
 4. 툴 루프(최대 `MAX_TOOL_ROUNDS`=5): `execute_tool` → 결과 전달 → 재호출
 5. 엔진 사후 보정: `guard_unrequested_move`, `auto_decline`, `auto_consume`, `auto_eat`, `settle_consumption`, `auto_charge`, `auto_money`
+   - **서술 속의 돈(`money_mentions`):** 서술을 문장 단위로 읽어 금액마다 방향을 정한다. 금액 뒤 가장 가까운 동사로 받음·냄·잃음·훔침을 가리고, 뒤에 '겠·기로·수 있'이 붙으면 약속으로 무시한다. '건네(주)'는 앞에 받는 쪽 표시(당신에게·수고비·일당·보수·여비 등)가 있으면 받음, 다른 사람'에게'면 냄, 둘 다 없으면 모름. `auto_charge`는 냄, `auto_money`는 잃음·받음(범죄 의도가 없으면 훔침 제외)을 엔진이 돈을 움직이지 않았을 때만 반영한다
+   - **`auto_eat`(GM이 먹고 마시기를 처리하지 않았을 때):** 입력에 나온 소지품을 먹은 것으로 처리한다. 이름이 여럿 걸리면 더 구체적인(긴) 이름을 고르고, 입력이 개울·강·샘·우물·빗물 같은 바깥의 물을 가리키면 가진 물을 대신 쓰지 않는다(그 물이 소지품에 있으면 그것을 쓴다)
+   - **돈 알림(`money_notices`):** GM 툴(`pay`, `update_status`)로 움직인 돈은 `turn_flags.money_log`에 이유와 함께 남고, 그 금액이 서술에 없으면 "💸 지출 -$50 — 이유" / "💵 수입" 알림을 띄운다
 6. `state.end_turn()`: GM이 시간을 흘리지 않았으면 입력으로 추정(`estimate_time`), 지난 기회 만료(제안은 나온 다음 턴까지만 유효), 사망·귀환 판정
 7. 서술 보정: `ensure_korean` → `ensure_scene` → `ensure_vitals` → `enforce_redo`
 8. 추천 행동 3개 확정(기회가 살아 있으면 1번은 '받아들이기')

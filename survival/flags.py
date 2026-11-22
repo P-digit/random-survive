@@ -34,6 +34,7 @@ class TurnFlags(TypedDict, total=False):
     # --- 돈 ---
     paid: float                   # 이번 턴에 쓴 돈
     earned: float                 # 이번 턴에 번 돈
+    money_log: list               # GM 툴로 움직인 돈 [{amount: +번 돈/-쓴 돈, why}] (서술에 없으면 알림)
 
     # --- 사건 (알림·효과음) ---
     attempt: dict                 # 판정 결과 {action, chance, success, effects, ...}

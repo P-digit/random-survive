@@ -336,14 +336,56 @@ def build_input(state, player_text, recap=None):
     return "\n".join(parts)
 
 
-PAYMENT = re.compile(r"\$\s?(\d+(?:\.\d+)?)[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)"
-                     r"|(\d+(?:\.\d+)?)\s?달러[^\n.]{0,20}?(지불|냈|내고|내자|건네|건넸|주고|치르|치렀|결제)")
+# ---------- 서술 속의 돈 ----------
+# GM이 툴을 빠뜨리고 서술로만 돈을 주고받았을 때를 대비해, 서술의 금액을 문장 단위로 읽는다.
+# 금액 바로 뒤의 가장 가까운 동사로 방향을 정하고, 약속("주겠다")은 무시하고, 모호하면 아무것도 하지 않는다.
+MONEY_AMOUNT = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s?달러")
+MONEY_VERBS = (   # (종류, 동사들) — 금액 뒤 28자 안에서 가장 먼저 나오는 것
+    ("in", ("손에 넣", "얻었", "얻어", "챙겼", "챙겨", "벌었", "벌어", "받았", "받아", "받는다", "받고", "받습니다",
+            "주웠", "주워", "건네받")),
+    ("theft", ("훔쳤", "훔쳐")),
+    ("loss", ("잃었", "잃고", "빼앗겼", "빼앗기", "뺏겼", "도둑맞", "털렸", "날렸", "벌금")),
+    ("out", ("지불", "냈", "내고", "내자", "내며", "낸다", "냅니다", "치르", "치렀", "결제", "건네", "건넸",
+             "받아 가", "받아가", "받아 갑", "받아갑", "받아 갔", "받아갔", "받아 간", "받아간",
+             "가져가", "가져갑", "가져갔", "가져간")),   # 상대가 받아 가는 돈 (갑·갔·간은 '가'와 다른 글자)
+    ("given", ("주었", "줬", "준다", "주며", "주고", "줍니다")),
+)
+# 받는 쪽이 플레이어라는 표시 (누가 '건네주는' 돈인지 가린다)
+TO_PLAYER = re.compile(r"당신에게|당신 손에|손에 쥐여|수고비|품삯|일당|보수|사례금|사례로|여비|용돈|대가로|급여|월급|팁으로")
+TO_SOMEONE = re.compile(r"[가-힣]+에게")
+PROMISE = re.compile(r"겠|기로|준다고|주마|줄게|수 있|려고|려 한")
 
 
-INCOME = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)[^\n.]{0,25}?(손에 넣|얻었|얻어|챙겼|챙겨|벌었|벌어|받았|받아|훔쳤|훔쳐|주웠|주워)"
-                    r"|(\d[\d,]*)\s?달러[^\n.]{0,25}?(손에 넣|얻었|얻어|챙겼|챙겨|벌었|벌어|받았|받아|훔쳤|훔쳐|주웠|주워)")
-LOSS = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)[^\n.]{0,25}?(잃었|잃고|빼앗겼|빼앗기|뺏겼|도둑맞|털렸|날렸|벌금)"
-                  r"|(\d[\d,]*)\s?달러[^\n.]{0,25}?(잃었|잃고|빼앗겼|빼앗기|뺏겼|도둑맞|털렸|날렸|벌금)")
+def money_mentions(text):
+    """서술에 나온 돈: [(금액, 종류)]. 종류는 in(받음) / out(냄) / loss(잃음) / theft(훔침) / promise(약속) / unknown."""
+    found = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
+        for match in MONEY_AMOUNT.finditer(sentence):
+            amount = float((match.group(1) or match.group(2)).replace(",", ""))
+            before, after = sentence[:match.start()], sentence[match.end():match.end() + 28]
+            hits = [(after.find(verb), kind, verb) for kind, verbs in MONEY_VERBS for verb in verbs if verb in after]
+            if not hits:
+                found.append((amount, "unknown"))
+                continue
+            position, _, kind, verb = min((pos, -len(verb), kind, verb) for pos, kind, verb in hits)   # 같은 자리면 긴 말
+            between = after[:position]                # 금액과 동사 사이 ("$15를 수고비로 건넸다")
+            if PROMISE.search(after[position + len(verb):position + len(verb) + 8]):
+                kind = "promise"                    # "$70을 챙겨 주겠다" — 아직 오가지 않은 돈
+            elif verb in ("건네", "건넸"):
+                # "수고비로 10달러를 건네줍니다"(받음) / "주인에게 $12를 건네고"(냄)
+                if TO_PLAYER.search(before) or TO_PLAYER.search(between):
+                    kind = "in"
+                elif not TO_SOMEONE.search(before) and "당신은" not in before and "당신이" not in before:
+                    kind = "unknown"
+            elif kind == "given":
+                kind = "in" if TO_PLAYER.search(before) or TO_PLAYER.search(between) else "unknown"
+            found.append((amount, kind))
+    return found
+
+
+def mentioned_amount(text, amount):
+    """서술에 그 금액이 나오는가 ($50, 50달러, 50 달러)."""
+    return any(abs(value - abs(amount)) < 0.5 for value, _ in money_mentions(text))
 
 
 def auto_money(state, narration):
@@ -351,19 +393,17 @@ def auto_money(state, narration):
     if state.money != state._snapshot.get("money", state.money) or state.turn_flags.get("paid") \
             or state.turn_flags.get("earned"):
         return 0.0
-    text = narration or ""
-    loss = LOSS.search(text)
-    if loss:
-        amount = min(float((loss.group(1) or loss.group(3)).replace(",", "")), state.money)
+    mentions = money_mentions(narration)
+    loss = next((amount for amount, kind in mentions if kind == "loss"), None)
+    if loss is not None:
+        amount = min(loss, state.money)
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
         return -amount
-    gain = INCOME.search(text)
-    if gain and state.turn_flags.get("crime_intent", ("explicit", ""))[0] == "none" \
-            and gain.group(2 if gain.group(1) else 4) in ("훔쳤", "훔쳐"):
-        gain = None                       # 범죄 의도가 없는 턴에 '훔친 돈'은 들어오지 않는다
-    if gain:
-        amount = min(float((gain.group(1) or gain.group(3)).replace(",", "")), MONEY_GAIN_LIMIT)
+    gains = [amount for amount, kind in mentions
+             if kind == "in" or (kind == "theft" and state.turn_flags.get("crime_intent", ("explicit", ""))[0] != "none")]
+    if gains:                             # 범죄 의도가 없는 턴에 '훔친 돈'은 들어오지 않는다
+        amount = min(gains[0], MONEY_GAIN_LIMIT)
         state.money = round(state.money + amount, 2)
         state.turn_flags["earned"] = amount
         return amount
@@ -374,14 +414,28 @@ def auto_charge(state, narration):
     """게임 마스터가 '돈을 냈다'고 서술했는데 이번 턴에 돈이 전혀 줄지 않았다면, 서술된 금액만큼 차감한다."""
     if state.money < state._snapshot.get("money", state.money) or state.turn_flags.get("paid"):
         return 0.0
-    match = PAYMENT.search(narration or "")
-    if not match:
+    amount = next((amount for amount, kind in money_mentions(narration) if kind == "out"), None)
+    if amount is None:
         return 0.0
-    amount = min(float(match.group(1) or match.group(3)), state.money)
+    amount = min(amount, state.money)
     if amount > 0:
         state.money = round(state.money - amount, 2)
         state.turn_flags["paid"] = amount
     return amount
+
+
+def money_notices(state, narration):
+    """GM 툴로 돈이 움직였는데 서술에는 그 금액이 없으면 알림으로 알려 준다(플레이어가 이유 없이 돈이 바뀐 것을 보지 않게)."""
+    notices = []
+    for entry in state.turn_flags.get("money_log") or []:
+        amount = entry["amount"]
+        if abs(amount) < 0.5 or mentioned_amount(narration, amount):
+            continue
+        spent = amount < 0
+        notices.append({"kind": "info",
+                        "title": f"{'💸 지출' if spent else '💵 수입'} {'-' if spent else '+'}${abs(amount):,.0f} — {entry['why']}",
+                        "text": f"서술에 빠진 돈 변화를 엔진이 반영했습니다. 남은 돈 ${state.money:,.0f}"})
+    return notices
 
 
 # 한글·영문·숫자·문장부호가 아닌 문자(데바나가리, 아랍, 키릴, 태국, 한자·가나 등)
@@ -676,6 +730,10 @@ def auto_decline(state, player_text):
 
 
 DRINK_VERBS = ("마신", "마셔", "마시", "들이켜", "들이킨", "목을 축")
+# 소지품이 아닌 바깥의 물. 입력이 이것을 가리키면 가진 물을 대신 마신 것으로 보지 않는다
+# ("개울을 찾아 물을 마신다"에서 개울을 못 찾았는데 가진 물 1L가 사라지던 문제)
+ENV_WATER = ("개울", "강물", "강가", "강에서", "냇물", "시냇", "계곡", "샘", "우물", "빗물", "호수", "폭포", "웅덩이",
+             "오아시스", "이슬", "눈을 녹", "눈을녹", "얼음을 녹", "얼음을녹", "수도")
 EAT_VERBS = ("먹는", "먹어", "먹고", "먹자", "먹었", "먹을", "씹어", "씹는", "삼킨", "삼켜", "베어 문")
 
 
@@ -710,7 +768,11 @@ def auto_eat(state, player_text):
                 continue                 # GM이 소지품이 아닌 것(강물 등)으로 회복을 줬다
             # 2) 아무것도 처리하지 않았다: 입력에 나온 소지품(없으면 그 종류의 첫 소지품)을 먹은 것으로
             candidates = [i for i in state.items if (consumable_effect(i) or ("", 0))[0] == stat]
-            named = [i for i in candidates if len(item_core(i)) >= 1 and item_core(i) in text]
+            named = sorted((i for i in candidates if len(item_core(i)) >= 1 and item_core(i) in text),
+                           key=lambda i: -len(item_core(i)))   # "샘물을 마신다" → '물 1L'보다 '샘물 1병'
+            outside = [w.replace(" ", "") for w in ENV_WATER if w.replace(" ", "") in text]
+            if stat == "hydration" and outside and not any(w in i.replace(" ", "") for i in candidates for w in outside):
+                continue                 # 바깥의 물을 마시려 했다: 찾았는지는 GM이 정한다. 가진 물은 그대로
             pick = (named or ([] if stat == "satiety" else candidates))[:1]
             if pick and state.consume_item(pick[0]):
                 done.append(pick[0])
@@ -850,7 +912,7 @@ def run_turn(state, player_text=None):
         # LLM이 시간을 흘리지 않았다면 플레이어 입력으로 추정해서 반영한다
         state.end_turn(*estimate_time(player_text))
 
-    state.notices = collect_notices(state)
+    state.notices = collect_notices(state) + money_notices(state, response.output_text)
     # 지명(현지 문자일 수 있음)은 그대로 두고, 서술에 섞인 다른 언어만 고친다
     text = ensure_korean(client, response.output_text or "", allowed=(state.place_name, state.scene_place))
     text = ensure_scene(client, text, state)
