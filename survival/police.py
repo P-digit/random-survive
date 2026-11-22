@@ -160,6 +160,21 @@ class PoliceMixin:
             reasons.append("부상 -15%")
         return round(min(0.9, max(0.05, chance)), 2), reasons
 
+    def police_odds(self):
+        """경찰 앞에서 고를 수 있는 대응과 지금의 성공 확률 (화면에 보여 줄 것). 쫓는 경찰이 없으면 빈 목록."""
+        if not self.pursuit:
+            return []
+        cost = BRIBE_COST.get(max(1, self.pursuit["stage"]), 300)
+        odds = []
+        for kind, label in (("flee", "도주"), ("hide", "숨기"), ("bluff", "둘러대기"), ("bribe", f"뇌물 ${cost}"),
+                            ("fight", "싸움")):
+            chance, _ = self.police_chance(kind)
+            if kind == "bribe" and self.money < cost:
+                chance = 0.0
+            odds.append({"kind": kind, "label": label, "chance": chance})
+        odds.append({"kind": "surrender", "label": "자수", "chance": None})   # 확실히 붙잡히지만 처벌이 가볍다
+        return odds
+
     def respond_to_police(self, kind):
         """경찰 앞에서의 대응을 판정하고 결과를 적용한다. kind: flee/hide/bribe/bluff/fight/surrender/ignore"""
         if not self.pursuit:

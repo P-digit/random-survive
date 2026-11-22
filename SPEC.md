@@ -19,7 +19,7 @@
 
 | 모듈 | 책임 |
 |---|---|
-| `app.py` | Gradio 화면 구성, 새 게임/이어하기, 턴 실행(`play`), 장면 그림 갱신 여부 판단 |
+| `app.py` | Gradio 화면 구성(한 화면: 상단 줄 + 3열), 새 게임/이어하기, 턴 실행(`play`), 장면 그림 갱신 여부 판단 |
 | `survival/state.py` | `GameState` 데이터클래스(모든 필드)와 공통 규칙: 시간 흐름, 생체 수치, 날씨·기후, 장면·인물, 단서와 사실, 턴 시작/종료, `create_game`. 아래 믹스인 5개를 상속한다 |
 | `survival/inventory.py` | `InventoryMixin`: 소지품 넣고 빼기, 먹고 마시기(용량·일부만 마시기), 돈 쓰기. 소지품 판정 함수(`item_core`, `consumable_effect` 등) |
 | `survival/crime.py` | `CrimeMixin`: 자유 행동 판정, 범죄 기록·목격·수배도, 원한을 가진 사람, 체포 |
@@ -47,7 +47,9 @@
 | `survival/flags.py` | `turn_flags`·`flags` 키 목록(TypedDict)과 뜻 |
 | `survival/sound.py` | 게임 상태 → 배경 소리 층별 크기(0~1), 이번 턴의 사건 효과음 선택. 화면과 분리된 순수 함수 (10장) |
 | `survival/static/sound.js` | 브라우저 소리 엔진. Web Audio로 합성하고, 상태창의 소리 신호가 바뀌면 층별 크기를 바꿈 |
-| `survival/ui.py` | CSS, HUD(상태창) HTML, 알림 상자, 턴 요약 |
+| `survival/ui.py` | CSS, 화면 조각 HTML(상단 줄·위치·신체 수치·결정 상자·지도·정보 탭 3개), 알림 상자, 턴 요약 |
+| `survival/static/keys.js` | 키보드 단축키: 1·2·3 추천 행동, Enter·/ 입력창 |
+| `data/world_land.json` | 미니 지도의 육지 윤곽(Natural Earth 110m, 퍼블릭 도메인, 단순화 22KB) |
 | `survival/savegame.py` | `saves/autosave.json` 자동 저장·불러오기 |
 | `survival/config.py` | 모든 설정값과 밸런스 수치 |
 | `mcp_server.py` | 엔진 기능 일부(좌표, 날씨, 위험도, 지식 검색)를 FastMCP 서버로 공개 |
@@ -169,3 +171,11 @@
 - **완료·실패(`end_turn`의 `check_mission`):** 목적지 30km 안이면 보수(`money_log` shown), 짐 제거, 사실로 기억(다음 턴 GM이 앎). 짐을 잃었거나(압수·판매) 기한이 지나면 실패
 - **세관·국경:** 밀수품을 가지고 대중교통으로 나라를 넘으면 35% 확률로 세관원(`customs_check`, `_relocate`), 자기 탈것이면 `_border_check`가 항상 경비대. 둘 다 경찰과 같은 방식으로 다음 턴 판정
 - GM 입력 `[의뢰 제안]`/`[의뢰 수락]`/`[맡은 의뢰]`, 알림 📦, 효과음(제안·완료·실패), 제안 턴의 첫 버튼 "의뢰를 맡겠다고 한다", 상태창 LIFE 칸, 업적(심부름꾼 3번, 밀수꾼 1번)
+
+## 16. 화면 (`app.py`, `survival/ui.py`)
+- **한 화면:** 넓은 화면(≥1000px)에서는 페이지가 스크롤되지 않는다. 상단 줄(제목·DAY/시각·날씨·한국까지·돈·수배★·장면 그림·소리·낙하/이어하기) + 3열: 왼쪽(장면 그림이 남는 높이를 채움·위치·신체 수치) / 가운데(이야기 로그만 안에서 스크롤·결정 상자·행동 1·2·3·입력창) / 오른쪽(탭: 🧭 상황 · 🎒 소지품 · 🏆 기록, 탭 안에서 스크롤). 1000px 미만은 세로로 쌓는다
+- **Gradio CSS 주의:** Gradio 6은 `css` 인자의 `@media` 안 규칙을 `.gradio-container .contain` 아래로 한정한다. 바깥 틀(body·.gradio-container·.main·.wrap·.contain)을 화면 높이에 맞추는 규칙은 `FRAME_CSS`로 `<head>`(`page_head()`)에 넣는다
+- **출력 순서(`app.view`):** state, chat, 상단 줄(+소리 신호), 위치, 신체 수치, 결정 상자(비면 숨김), 상황·소지품·기록 탭, 장면, 행동 버튼 3개, 입력창, 낙하 버튼, 이어하기 버튼 — 16개. `test_view_matches_the_screen_outputs`가 화면의 이벤트 출력 수와 맞는지 확인
+- **결정 상자(`render_alerts`):** 게임 끝 배너, 경찰(대응별 엔진 성공 확률 `PoliceMixin.police_odds` — 도주·숨기·둘러대기·뇌물 $N·싸움, 자수는 확정), 큰 기회, 의뢰 제안. 경찰이 있으면 화면 가장자리 경광등, 위급 수치(체력<25·수분<15·포만감<10)면 붉은 맥박
+- **지도(`render_map`):** 육지 윤곽 + 도시 점 + 서울 + 현재 위치 + 지나온 길(`stats.trail`, `record_trail`: 5km 이상 움직인 턴마다, 300점이 넘으면 솎음) + 의뢰·여정 목적지. 경도는 서울 기준으로 펼쳐 날짜변경선에서 끊기지 않고, 관심 지점을 모두 담도록 자동 확대(최소 경도 60°, 가로:세로 2:1)
+- **소리 조절**은 상단 줄의 `#rs-sound-slot`으로 옮겨진다(`sound.js`의 `dockControls`). 자리가 없으면 오른쪽 아래에 떠 있다
